@@ -1,0 +1,66 @@
+<div class="valet-home">
+  <section class="valet-hero">
+    <div class="valet-hero__copy">
+      <div class="valet-eyebrow">Schema and data validation</div>
+      <h1>Trust your data <span class="valet-gradient-text">before it ships.</span></h1>
+      <p class="valet-lede">Check Parquet columns and types without scanning rows, or validate CSV, JSON, NDJSON and Parquet values with structured results for automation.</p>
+      <div class="valet-actions">
+        <a class="valet-button valet-button--primary" href="{{ "getting-started/" | relURL }}">Get started&nbsp; →</a>
+        <a class="valet-button" href="{{ "rules/" | relURL }}">Rules cookbook</a>
+        <a class="valet-button" href="{{ "guides/schema/" | relURL }}">Parquet schema checks</a>
+      </div>
+      <div class="valet-microcopy">
+        <span>Single static binary</span>
+        <span>Bounded memory</span>
+        <span>Local and S3</span>
+      </div>
+    </div>
+
+    <div class="valet-terminal" aria-label="Example Parquet schema-only command and report scope">
+      <div class="valet-terminal__bar"><i></i><i></i><i></i><span>parquet-schema-check</span></div>
+      <div class="valet-terminal__body">
+        <div class="valet-terminal__line"><span class="valet-terminal__prompt">$</span> valet schema <span class="valet-terminal__flag">-p</span> schema.yml \</div>
+        <div class="valet-terminal__line">&nbsp;&nbsp;<span class="valet-terminal__flag">-i</span> input.parquet</div>
+        <div class="valet-terminal__line valet-terminal__muted">"scope": "schema"</div>
+        <div class="valet-terminal__line valet-terminal__muted">"validation": "not_evaluated"</div>
+        <div class="valet-result">
+          <div><strong>Columns</strong><span>names and types</span></div>
+          <div><strong>JSON</strong><span>schema report</span></div>
+          <div><strong>0</strong><span>rows checked</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="valet-format-strip">
+    <span>Supported</span>
+    <div class="valet-formats"><b>CSV</b><b>JSON</b><b>NDJSON</b><b>Parquet</b><b>S3</b></div>
+  </div>
+
+  <section class="valet-section">
+    <div class="valet-section__header">
+      <div><span class="valet-kicker">Core capabilities</span><h2>A strict, explicit validation pipeline.</h2></div>
+      <p>Choose a metadata-only schema report or full validation with row checks, conversion, provenance and committed outputs. The result tells you what was—and was not—checked.</p>
+    </div>
+
+    <div class="valet-feature-grid">
+      <article class="valet-feature"><span class="valet-feature__number">01</span><h3>Schema-only Parquet checks</h3><p>Check required columns and expected types from footer metadata. Value-dependent checks are explicitly marked not evaluated.</p></article>
+      <article class="valet-feature"><span class="valet-feature__number">02</span><h3>Rules people can read</h3><p>Check nulls, strict ranges, column relationships, schemas, uniqueness, references and dataset totals.</p></article>
+      <article class="valet-feature"><span class="valet-feature__number">03</span><h3>Bounded by design</h3><p>Decoder, batch, index and publication state is charged against a managed-memory budget.</p></article>
+      <article class="valet-feature"><span class="valet-feature__number">04</span><h3>Structured evidence</h3><p>Every issue carries stable codes and row provenance. Rejects retain raw values and conversion diagnostics.</p></article>
+      <article class="valet-feature"><span class="valet-feature__number">05</span><h3>Manifest-last full results</h3><p>Full validation publishes one terminal manifest. Schema-only inspection instead returns a separate JSON report.</p></article>
+      <article class="valet-feature"><span class="valet-feature__number">06</span><h3>Local or object storage</h3><p>Read and publish locally or through S3-compatible storage with bounded multipart handling.</p></article>
+    </div>
+  </section>
+
+  <section class="valet-stats" aria-label="Valet characteristics">
+    <div class="valet-stat"><strong>Streaming</strong><span>multi-gigabyte files with bounded row state</span></div>
+    <div class="valet-stat"><strong>Schema-only</strong><span>Parquet column and type checks without reading rows</span></div>
+    <div class="valet-stat"><strong>Manifest-last</strong><span>one authoritative result per committed run</span></div>
+  </section>
+
+  <section class="valet-cta">
+    <div><h2>Try both validation modes.</h2><p>Validate the sample CSV, inspect its generated Parquet schema, and learn which result to consume.</p></div>
+    <a class="valet-button" href="{{ "getting-started/quickstart/" | relURL }}">Open the quickstart&nbsp; →</a>
+  </section>
+</div>

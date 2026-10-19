@@ -1,0 +1,29 @@
+name: Explicitly trusted Parquet amount checks
+version: "1.0"
+
+# Use only with a producer whose statistics you explicitly trust.
+# A readable footer does not prove that its values or counts are truthful.
+input:
+  type: parquet
+  parquet:
+    statistics: off
+  schema:
+    extra_fields: ignore
+    columns:
+      amount: {type: int64, required: true, nullable: false}
+
+output:
+  mode: report
+
+rules:
+  - code: AMOUNT_POSITIVE
+    level: error
+    column: amount
+    checks:
+      - type: valid_range
+        min: 0
+        exclusive_min: true
+
+# Explicit override for trusted producers:
+# valet validate -p examples/parquet-statistics.yml -i input.parquet \
+#   -o reports/ --parquet-stats trusted --log-format json

@@ -1,0 +1,113 @@
+name: Orders cookbook
+version: "1.0"
+
+input:
+  type: csv
+  schema:
+    extra_fields: error
+    columns:
+      order_id: {type: string}
+      customer_id: {type: string}
+      quantity: {type: int64}
+      unit_price: {type: decimal, precision: 12, scale: 2}
+      subtotal: {type: decimal, precision: 14, scale: 2}
+      paid_total: {type: decimal, precision: 14, scale: 2}
+      status: {type: string}
+      created_at:
+        type: timestamp
+        timezone: UTC
+        formats: ["%Y-%m-%dT%H:%M:%S%:z"]
+      closed_at:
+        type: timestamp
+        timezone: UTC
+        formats: ["%Y-%m-%dT%H:%M:%S%:z"]
+
+execution:
+  memory_budget: 128MiB
+  batch_target: 4MiB
+  max_record_bytes: 1MiB
+
+rules:
+  - code: EXACT_ORDER_SCHEMA
+    name: Input contains exactly the documented order columns
+    level: error
+    checks:
+      - type: schema_matches
+        mode: strict
+        require_columns: true
+        allow_extra_columns: false
+        columns:
+          order_id: string
+          customer_id: string
+          quantity: int64
+          unit_price: decimal
+          subtotal: decimal
+          paid_total: decimal
+          status: string
+          created_at: timestamp
+          closed_at: timestamp
+
+  - code: ORDER_ID_REQUIRED
+    level: error
+    column: order_id
+    checks:
+      - type: not_null
+      - type: not_blank
+
+  - code: CUSTOMER_ID_REQUIRED
+    level: error
+    column: customer_id
+    checks:
+      - type: not_null
+      - type: not_blank
+
+  - code: QUANTITY_POSITIVE
+    level: error
+    column: quantity
+    checks:
+      - type: valid_range
+        min: 0
+        exclusive_min: true
+
+  - code: UNIT_PRICE_POSITIVE
+    level: error
+    column: unit_price
+    checks:
+      - type: valid_range
+        min: 0
+        exclusive_min: true
+
+  - code: STATUS_ALLOWED
+    level: error
+    column: status
+    checks:
+      - type: valid_values
+        values: [OPEN, PAID, CANCELLED]
+
+  - code: ORDER_ID_UNIQUE
+    level: error
+    column: order_id
+    checks:
+      - type: is_unique
+
+  - code: PAID_TOTAL_MATCHES_SUBTOTAL
+    level: error
+    when: {column: status, operator: eq, value: PAID}
+    checks:
+      - type: compare_columns
+        column: paid_total
+        other_column: subtotal
+        operator: "=="
+
+  - code: PAID_ORDER_CLOSED_AT_REQUIRED
+    level: error
+    column: closed_at
+    when: {column: status, operator: eq, value: PAID}
+    checks:
+      - type: not_null
+
+dataset_rules:
+  - code: DATASET_NOT_EMPTY
+    level: error
+    metric: row_count
+    min: 1

@@ -1,0 +1,42 @@
+{
+  "contract": "docs/engineering/spec.md section 12",
+  "execution": "go test -tags=integration ./integration",
+  "E2E-01": ["TestE2E01FixtureA"],
+  "E2E-02": ["TestE2E02FixtureB"],
+  "E2E-03": ["TestE2E03FixtureC"],
+  "E2E-04": ["TestE2E04CSVFraming", "TestCSVNullAndEscapeContract"],
+  "E2E-05": ["TestE2E05JSONStructuralLimits"],
+  "E2E-06": ["TestE2E06PresenceAndSchema"],
+  "E2E-07": ["TestE2E07WholeDatasetGates"],
+  "E2E-08": ["TestE2E08FixtureDUniqueness", "TestE2E20ResourceLimits/uniqueness"],
+  "E2E-09": ["TestE2E09FixtureDReferenceTuples"],
+  "E2E-10": ["TestE2E10ConditionalEvaluation", "TestCLIStringColumnNumericLiterals"],
+  "E2E-11": ["TestE2E11FixtureE"],
+  "E2E-12": ["TestE2E12DatesAndTimezones"],
+  "E2E-13": ["TestE2E13RenamesAndRelativeReferences", "TestE2E14S3CrossFormats/S3_rename_and_reference"],
+  "E2E-14": ["TestE2E14S3CrossFormats"],
+  "E2E-15": ["TestE2E15LocalOrderingAndOverlap", "TestE2E15S3PaginatedDiscovery"],
+  "E2E-16": ["TestE2E16S3ChangedReplayObject"],
+  "E2E-17": ["TestE2E17TinyBatchesAndWorkers", "TestE2E17S3SlowSink"],
+  "E2E-18": ["TestE2E18LocalWriteFailure", "TestE2E18S3FinalUploadFailure", "TestE2E18InterruptDuringObjectRead", "TestE2E18TerminateDuringObjectRead"],
+  "E2E-19": ["TestE2E19ConfigurationFailures", "TestCLILogsOnlyOnStderr", "TestCLIPlainSummary", "TestCLIStats", "TestCLIInputTypeDetection"],
+  "E2E-20": ["TestE2E20ResourceLimits", "TestE2E20ParquetDecoderLimits"],
+  "E2E-21": ["TestE2E21CompressionPaths"],
+  "E2E-22": ["TestE2E22BuiltinCompatibility", "TestE2E22MigrationNullIsland"],
+  "E2E-23": ["TestE2E23NativeTarget"],
+  "E2E-24": ["TestE2E24S3AWSIsolatedRun"],
+  "parquet_integrity": ["TestParquetMixedPhysicalTypesPreserveEveryInputRow", "TestParquetWorkersPreserveRowsValuesAndBucketOrder", "TestSchemaCommandDoesNotClaimRowValidation"],
+  "validation_modes": {
+    "contract": "docs/engineering/validation-modes-spec.md",
+    "acceptance": "docs/engineering/validation-modes-e2e.md",
+    "required_case_ids": 62,
+    "test_prefix": "TestVM",
+    "execution": "go test -count=1 -tags=integration ./integration -run '^TestVM'",
+    "backend": "real MinIO with VALET_S3_ENDPOINT, VALET_S3_BUCKET, SDK credentials and explicit VALET_S3_CREATE_VERSIONED_BUCKET=1 for owned versioned buckets"
+  },
+  "optional_jobs": {
+    "MinIO": "go test -tags=integration ./integration -run '^TestE2E[0-9]+S3'; VALET_S3_ENDPOINT and VALET_S3_BUCKET; SDK credentials; optional VALET_S3_CREATE_BUCKET=1",
+    "AWS": "VALET_AWS_INTEGRATION=1 and VALET_AWS_BUCKET; scoped SDK credentials; optional VALET_AWS_KMS_KEY_ID",
+    "scale": "go test -tags=scale ./benchmarks -run '^TestScale100GiB$' -timeout 0 -v"
+  }
+}

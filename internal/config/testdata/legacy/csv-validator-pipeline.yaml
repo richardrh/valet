@@ -1,0 +1,70 @@
+name: CSV Validator Golden
+version: "1.0"
+
+input:
+  type: csv
+  mode: raw_strings
+
+rules:
+  - name: numeric_type_context
+    code: NUMERIC_TYPE
+    message: "amount_a and amount_b must be numeric"
+    level: error
+    checks:
+      - type: type_check
+        columns:
+          - amount_a
+          - amount_b
+        expected_type: float
+
+  - name: amount_b_range
+    code: AMOUNT_B_RANGE
+    message: "amount_b must be between 0 and 50"
+    level: error
+    column: amount_b
+    checks:
+      - type: valid_range
+        min: 0
+        max: 50
+
+  - name: amount_a_greater_than_amount_b
+    code: AMOUNT_COMPARE
+    message: "amount_a must be greater than amount_b"
+    level: error
+    column: amount_a
+    checks:
+      - type: compare_columns
+        other_column: amount_b
+        operator: ">"
+
+  - name: date_formats
+    code: DATE_FORMATS
+    message: "start_date and end_date must be valid configured dates"
+    level: error
+    checks:
+      - type: date_format
+        columns:
+          - start_date
+          - end_date
+        formats:
+          - "%Y-%m-%d"
+          - "%d/%m/%Y"
+
+  - name: end_after_start
+    code: DATE_COMPARE
+    message: "end_date must be after start_date"
+    level: error
+    column: end_date
+    checks:
+      - type: compare_columns
+        other_column: start_date
+        operator: ">"
+
+  - name: manual_review_flag
+    code: REVIEW_FLAGGED
+    message: "row is flagged for manual review"
+    level: warn
+    column: review_flag
+    checks:
+      - type: equals
+        value: "Y"

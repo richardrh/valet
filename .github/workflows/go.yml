@@ -1,0 +1,209 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      run_scale:
+        description: Run the generated 100 GiB Arrow acceptance workload
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      run_scale:
+        description: Run the generated 100 GiB Arrow acceptance workload
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Verify modules
+        run: go mod verify
+      - name: Check formatting
+        run: |
+          unformatted="$(gofmt -l .)"
+          if test -n "$unformatted"; then
+            printf 'gofmt required for:\n%s\n' "$unformatted"
+            exit 1
+          fi
+      - name: Vet
+        run: go vet ./...
+      - name: Race tests
+        env:
+          CGO_ENABLED: '1'
+        run: go test -race ./internal/config ./internal/source ./internal/checks ./internal/storage ./internal/sink ./internal/app ./internal/cli
+      - name: Scan reachable dependency vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+      - name: Validate GitHub workflows
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -shellcheck= .github/workflows/*.yml
+
+  verify:
+    needs: quality
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: linux-amd64
+            executable: valet
+          - runner: ubuntu-24.04-arm
+            target: linux-arm64
+            executable: valet
+          - runner: windows-2025
+            target: windows-amd64
+            executable: valet.exe
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      CGO_ENABLED: '0'
+      VERSION: ${{ github.ref_type == 'tag' && github.ref_name || github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Unit tests
+        run: go test ./...
+      - name: Build self-contained CLI
+        run: go build -trimpath -ldflags="-s -w -X main.version=$VERSION" -o 'dist/${{ matrix.executable }}' ./cmd/valet
+      - name: Release executable reports stamped version
+        run: test "$('./dist/${{ matrix.executable }}' --version | tr -d '\r')" = "valet $VERSION"
+      - name: CLI acceptance scenarios against release executable
+        run: VALET_BINARY="$PWD/dist/${{ matrix.executable }}" go test -tags integration ./integration
+      - uses: actions/upload-artifact@v4
+        with:
+          name: valet-${{ matrix.target }}
+          path: dist/${{ matrix.executable }}
+          if-no-files-found: error
+
+  darwin-cross-build:
+    needs: quality
+    strategy:
+      fail-fast: false
+      matrix:
+        goarch: [amd64, arm64]
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash
+    env:
+      CGO_ENABLED: '0'
+      GOOS: darwin
+      GOARCH: ${{ matrix.goarch }}
+      VERSION: ${{ github.ref_type == 'tag' && github.ref_name || github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Cross-build CLI (not executed; no macOS runner)
+        run: go build -trimpath -ldflags="-s -w -X main.version=$VERSION" -o dist/valet ./cmd/valet
+      - name: Compile darwin test binaries
+        run: go test -tags integration -run '^$' -exec true ./...
+      - uses: actions/upload-artifact@v4
+        with:
+          name: valet-darwin-${{ matrix.goarch }}
+          path: dist/valet
+          if-no-files-found: error
+
+  s3-compatible:
+    needs: quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      CGO_ENABLED: '0'
+      AWS_ACCESS_KEY_ID: valet-ci
+      AWS_SECRET_ACCESS_KEY: valet-ci-local-only
+      AWS_REGION: us-east-1
+      VALET_S3_ENDPOINT: http://127.0.0.1:19000
+      VALET_S3_BUCKET: valet-ci
+      VALET_S3_CREATE_BUCKET: '1'
+      VALET_S3_CREATE_VERSIONED_BUCKET: '1'
+      MINIO_VERSION: v0.0.0-20250907161309-07c3a429bfed
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Restore pinned MinIO
+        id: minio
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/valet-tools/minio
+          key: minio-${{ runner.os }}-${{ runner.arch }}-${{ env.MINIO_VERSION }}
+      - name: Build pinned MinIO from source
+        if: steps.minio.outputs.cache-hit != 'true'
+        run: GOBIN="$HOME/.cache/valet-tools" go install "github.com/minio/minio@$MINIO_VERSION"
+      - name: Start isolated object store
+        run: |
+          MINIO_ROOT_USER="$AWS_ACCESS_KEY_ID" MINIO_ROOT_PASSWORD="$AWS_SECRET_ACCESS_KEY" \
+            "$HOME/.cache/valet-tools/minio" server "$RUNNER_TEMP/minio-data" \
+            --address 127.0.0.1:19000 --console-address 127.0.0.1:19001 \
+            > "$RUNNER_TEMP/minio.log" 2>&1 &
+          curl --fail --retry 15 --retry-delay 1 --retry-connrefused http://127.0.0.1:19000/minio/health/ready
+      - name: Build acceptance CLI
+        run: go build -trimpath -ldflags="-s -w" -o dist/valet ./cmd/valet
+      - name: Real S3-compatible and validation-mode acceptance
+        env:
+          VALET_BINARY: ${{ github.workspace }}/dist/valet
+        run: go test -count=1 -tags integration ./integration -run '^(TestE2E[0-9]+S3|TestVM)' -v -timeout 20m
+      - name: Build race-instrumented acceptance CLI
+        env:
+          CGO_ENABLED: '1'
+        run: go build -race -trimpath -o dist/valet-race ./cmd/valet
+      - name: Real CLI race acceptance
+        env:
+          VALET_BINARY: ${{ github.workspace }}/dist/valet-race
+          GORACE: halt_on_error=1 atexit_sleep_ms=0
+        run: go test -count=1 -tags integration ./integration -run '^TestVM' -v -timeout 20m
+
+  generated-scale:
+    needs: quality
+    if: github.event_name == 'workflow_dispatch' && inputs.run_scale
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      CGO_ENABLED: '0'
+      VALET_SCALE_ARTIFACT: scale-result.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Generated Arrow scale acceptance
+        run: go test -tags=scale ./benchmarks -run '^TestScale100GiB$' -timeout 0 -v
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: generated-scale-result
+          path: benchmarks/scale-result.json

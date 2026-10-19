@@ -1,0 +1,7 @@
+/dist/
+/valet
+/valet.exe
+/output/
+*.test
+*.prof
+/benchmarks/scale-result.json

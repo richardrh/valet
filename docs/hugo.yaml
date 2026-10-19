@@ -1,0 +1,71 @@
+baseURL: https://richardrh.github.io/valet/
+languageCode: en-us
+title: valet
+enableGitInfo: true
+enableRobotsTXT: true
+
+module:
+  hugoVersion:
+    extended: true
+    min: 0.146.0
+  imports:
+    - path: github.com/imfing/hextra
+
+markup:
+  goldmark:
+    renderer:
+      unsafe: true
+  highlight:
+    noClasses: false
+
+menu:
+  main:
+    - name: Documentation
+      pageRef: /getting-started
+      weight: 1
+    - name: Rules
+      pageRef: /rules
+      weight: 2
+    - name: Operations
+      pageRef: /guides/operations
+      weight: 3
+    - name: Search
+      weight: 4
+      params:
+        type: search
+    - name: GitHub
+      url: https://github.com/richardrh/valet
+      weight: 5
+      params:
+        icon: github
+
+params:
+  description: Bounded streaming validation for CSV, JSON, NDJSON and Parquet.
+  navbar:
+    displayTitle: true
+    displayLogo: true
+    width: wide
+    logo:
+      path: images/valet-mark.svg
+      dark: images/valet-mark.svg
+      link: /valet/
+      width: 34
+      height: 34
+  page:
+    width: wide
+  footer:
+    width: wide
+    displayCopyright: false
+    displayPoweredBy: false
+  editURL:
+    enable: true
+    base: https://github.com/richardrh/valet/edit/main/docs/content
+  theme:
+    default: system
+    displayToggle: true
+  search:
+    enable: true
+    type: flexsearch
+    flexsearch:
+      index: content
+      tokenize: forward

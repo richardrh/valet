@@ -1,0 +1,68 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Validate version tag
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          if [[ ! "$VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
+            printf 'Expected vMAJOR.MINOR.PATCH with an optional prerelease suffix; got %s\n' "$VERSION" >&2
+            exit 1
+          fi
+
+  verify:
+    needs: version
+    uses: ./.github/workflows/go.yml
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: valet-*
+          path: artifacts
+      - name: Package tested binaries and generate checksums
+        run: bash .github/scripts/package-release.sh
+      - name: Publish release after all assets are uploaded
+        run: |
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            printf 'Release %s already exists; refusing to replace its assets.\n' "$VERSION" >&2
+            exit 1
+          fi
+          options=()
+          if [[ "$VERSION" == *-* ]]; then
+            options+=(--prerelease)
+          fi
+          gh release create "$VERSION" dist/* \
+            --verify-tag --draft --generate-notes --title "$VERSION" "${options[@]}"
+          if [[ "$VERSION" == *-* ]]; then
+            gh release edit "$VERSION" --draft=false --latest=false
+          else
+            gh release edit "$VERSION" --draft=false --latest
+          fi

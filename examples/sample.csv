@@ -1,0 +1,5 @@
+record_id,location,amount
+REC001,North,5000
+REC002,South,500
+,East,2000
+REC004,West,1500000
