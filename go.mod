@@ -1,6 +1,6 @@
 module github.com/richardrh/valet
 
-go 1.27.2
+go 1.27.3
 
 require (
 	github.com/apache/arrow-go/v18 v18.8.0

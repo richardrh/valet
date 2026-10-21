@@ -7,7 +7,7 @@ rendered into the site.
 ## Prerequisites
 
 - Hugo Extended 0.146.0 or later. CI pins Hugo Extended 0.156.0.
-- Go 1.27.2 or later (the repository's `go.mod` version), used by Hugo Modules
+- Go 1.27.3 or later (the repository's `go.mod` version), used by Hugo Modules
   to fetch the pinned Hextra v0.13.0 theme.
 
 ## Preview

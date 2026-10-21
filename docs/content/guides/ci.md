@@ -137,7 +137,7 @@ profile settings when required.
 ## Repository CI and release publishing
 
 The repository's automation lives in `.github/workflows/`. It uses the Go
-version from `go.mod` (currently Go 1.27.2); do not lower the version merely to
+version from `go.mod` (currently Go 1.27.3); do not lower the version merely to
 fit a runner's preinstalled toolchain.
 
 ### CI contract

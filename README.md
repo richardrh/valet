@@ -84,7 +84,7 @@ When `input.type` is omitted, it is inferred from the decoded input key suffix.
 Exit `0` allows warnings; `1` means failed checks; `2` means an operational or
 presentation failure without a committed manifest. Exit `3` means an artifact
 manifest committed but stdout presentation failed: consume it rather than
-rerunning validation. Building requires Go 1.27.2 or later.
+rerunning validation. Building requires Go 1.27.3 or later.
 
 See the [rules cookbook](docs/content/rules.md) for copy-paste checks covering
 types, positive values, nulls, column comparisons, exact schemas, references,
@@ -98,7 +98,7 @@ throughput and schema-only inspection timings.
 
 ## Installation and releases
 
-Build from source with Go 1.27.2 or later using the command above, or download
+Build from source with Go 1.27.3 or later using the command above, or download
 a versioned archive from [GitHub Releases](https://github.com/richardrh/valet/releases).
 Releases provide Linux amd64/arm64, Windows amd64 and macOS (Darwin)
 amd64/arm64 binaries. Verify the archive against the

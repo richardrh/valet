@@ -86,7 +86,7 @@ the intended repository's release over HTTPS.
 
 ## Build from source
 
-- Go 1.27.2 or later is required, matching the repository's `go.mod`.
+- Go 1.27.3 or later is required, matching the repository's `go.mod`.
 - No Python, Polars, cgo, Arrow C++ or native compression library is required.
 
 

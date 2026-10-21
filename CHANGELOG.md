@@ -74,7 +74,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Security
 
-- Require Go 1.27.2 and `golang.org/x/net` v0.61.0 to pick up fixes for the standard-library `net/http`, HTTP/2, `crypto/tls`, `os`, `mime/multipart` and `html/template` vulnerabilities reported by `govulncheck` against Go 1.27.0.
+- Require Go 1.27.3 to fix [GO-2026-6809](https://pkg.go.dev/vuln/GO-2026-6809) (compromised intermediate-certificate verification); retain `golang.org/x/net` v0.61.0 and the earlier standard-library security fixes.
 
 ### Differences from Python validnator
 
