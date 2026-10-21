@@ -116,15 +116,21 @@ func (c *Config) ForReference(uri string, columns []string) *Config {
 }
 
 // Validate checks the effective configuration after overrides. Output.URI may be
-// absent for planning; the run entry point requires a destination. The first
-// call fills defaults for code-built configurations and infers input.type from
-// the effective source; later calls only re-check and never change values.
+// absent for reporting and planning. The first call fills defaults for code-built
+// configurations and infers input.type from the effective source; later calls
+// only re-check and never change values.
 func (c *Config) Validate() error {
 	if c == nil {
 		return fmt.Errorf("configuration is nil")
 	}
 	c.applyDefaults()
 	c.deriveDefaults()
+	if c.Output.Mode == "" {
+		c.Output.Mode = "report"
+		if c.Output.URI != "" {
+			c.Output.Mode = "all"
+		}
+	}
 	if c.Input.Type == "" {
 		c.Input.Type = c.inferInputType()
 	}

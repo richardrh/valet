@@ -16,10 +16,11 @@ commands in this module but are not an external embedding API.
 | `internal/resource` | Managed reservations, Arrow allocator and bounded Parquet codecs |
 | `internal/data` | Shared Arrow ownership, field states, provenance and result structures |
 
-Execution is serial and pull-based: the application consumes one bounded batch,
-evaluates it, writes results, and releases it before requesting the next batch.
-Rule messages are run metadata rather than repeated per-row structs. Optional
-parallel workers are not implemented; requesting more than one is rejected.
+Execution accepts 1–32 workers (default 1), with bounded, ordered overlap
+between input, single-owner rule evaluation and single-owner output. Parquet
+row-group verification/decoding can run concurrently; queued batches and
+worker workspaces share the managed budget. Rule messages are run metadata
+rather than repeated per-row structs.
 
 Uniqueness uses an exact budgeted key index and replay so the first occurrence
 of a duplicate fails too. Reference indexes are projected and shared. Neither
@@ -53,11 +54,18 @@ credentials, queries and fragments. Row values and credentials are never
 logged. AWS SDK messages are routed into the same logger at debug level.
 
 ## Publication
+Without an output URI, validation uses aggregate-only `report` mode: no sink,
+output AWS client, metadata, row issues, evidence files or manifest is created.
+Counts, coverage, trust, provenance and bounded schema/dataset diagnostics
+remain in the summary. Stdout defaults to JSON; a presentation failure without
+a committed manifest returns exit `2`, not `3`. Successful stdout-only terminal
+logs report `manifest_committed: false`.
 
-Output parts and metadata are written under a unique run location. Local files
+
+With an explicit output URI, output parts and metadata use a unique run location. Local files
 and containing directory entries are synced before the terminal manifest;
 ambiguous S3 writes are reconciled by write identity, length and digest.
-`manifest.json` is published last, and its absence means the run is incomplete
+`manifest.json` is published last, and its absence means the artifact run is incomplete
 regardless of which parts exist. Requested summary files participate in the
 pre-commit callback. Stdout remains post-commit presentation; failure there
 returns exit `3` without invalidating the manifest. This is an application

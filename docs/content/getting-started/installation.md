@@ -8,10 +8,10 @@ next: getting-started/quickstart
 
 ## Download a release
 
-Once a version has been published, download an archive and `checksums.txt`
-from [GitHub Releases](https://github.com/richardrh/valet/releases).
-Replace `<tag>` with the full version tag, such as `v0.1.0` or
-`v0.1.0-rc.1`; these are examples, not a promise that those releases exist.
+Download an archive and `checksums.txt` from
+[GitHub Releases](https://github.com/richardrh/valet/releases).
+Replace `<tag>` with the full version tag. The initial release candidate is
+`v0.1.0-rc.1`; prereleases are not marked as the latest stable release.
 
 | Platform | Archive |
 | --- | --- |
@@ -22,7 +22,7 @@ Replace `<tag>` with the full version tag, such as `v0.1.0` or
 | macOS Apple Silicon | `valet_<tag>_darwin_arm64.tar.gz` |
 
 Every archive contains `valet` (`valet.exe` on Windows), `README.md`,
-`CHANGELOG.md` and `LICENSE`. Valet uses the MIT License; third-party
+`CHANGELOG.md`, `LICENSE` and `SECURITY.md`. Valet uses the MIT License; third-party
 dependencies retain their respective licenses.
 
 ### Linux
@@ -138,6 +138,7 @@ CGO_ENABLED=0 go build \
 
 The repository CI executes native Linux amd64/arm64 and Windows amd64 tests
 and release-binary CLI acceptance, plus Darwin cross-builds and test
-compilation. S3-compatible acceptance uses an isolated MinIO instance; it does
-not verify real AWS. See the [CI guide](../../guides/ci/) for release publishing
-and the one-time GitHub setup.
+compilation. S3-compatible acceptance runs release and race-instrumented CLIs
+against independent MinIO and RustFS containers; it does not verify AWS IAM/KMS
+or actual AWS service behavior. See the [CI guide](../../guides/ci/) for release
+publishing and the one-time GitHub setup.

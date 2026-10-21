@@ -1,5 +1,6 @@
 ---
 title: Output modes and metadata trust
+linkTitle: Output modes & stats
 weight: 17
 type: docs
 prev: guides/schema
@@ -10,6 +11,12 @@ Choose **what to validate** separately from **which rows to write**. Ordinary
 validation reads values by default, even when you ask for a smaller report.
 
 ## Choose which rows to write
+Without `-o` or `output.uri`, validation defaults to `report`: one aggregate
+JSON summary on stdout, no files or manifest, and no detailed per-row issue
+list. Counts, coverage, trust and bounded schema/dataset diagnostics remain.
+An explicit `all` or `failures` without a destination is rejected. With an
+output URI the default is `all`; the following table describes artifact runs.
+
 
 ```bash
 valet validate -p pipeline.yml -i input.parquet -o results/ --output-mode failures
@@ -18,14 +25,15 @@ valet validate -p pipeline.yml -i input.parquet -o reports/ --output-mode report
 
 | Mode | Row files written | Other results |
 |---|---|---|
-| `all` (default) | Pass, warning and error rows | Issues, raw rejects, indexes, summary and manifest |
+| `all` (default with URI) | Pass, warning and error rows | Issues, raw rejects, indexes, summary and manifest |
 | `failures` | Warning and error rows, not passing rows | Issues, raw rejects, indexes, summary and manifest |
 | `report` | No row files or raw reject records | Issues, indexes, summary, applicable evidence and manifest |
 
-All modes still execute the selected validation policy and publish a terminal
-manifest. Report-only does not mean stop at the first failure or write only to
-stdout. Warning/error/unevaluable counts and dataset failures are retained.
-Report-only retains ingestion diagnostics but omits the original rejected record.
+All modes still execute the selected validation policy. With a destination,
+all publish a terminal manifest last; `report` retains ingestion diagnostics
+but omits the original rejected record. Without a destination, `report` only
+returns the aggregate summary. Neither form stops at the first failure;
+warning/error/unevaluable counts and dataset failures are retained.
 
 Configure the default in the pipeline, or override it with `--output-mode`:
 

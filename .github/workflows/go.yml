@@ -132,59 +132,37 @@ jobs:
           if-no-files-found: error
 
   s3-compatible:
+    name: s3-compatible (${{ matrix.backend }})
     needs: quality
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [minio, rustfs]
     defaults:
       run:
         shell: bash
-    env:
-      CGO_ENABLED: '0'
-      AWS_ACCESS_KEY_ID: valet-ci
-      AWS_SECRET_ACCESS_KEY: valet-ci-local-only
-      AWS_REGION: us-east-1
-      VALET_S3_ENDPOINT: http://127.0.0.1:19000
-      VALET_S3_BUCKET: valet-ci
-      VALET_S3_CREATE_BUCKET: '1'
-      VALET_S3_CREATE_VERSIONED_BUCKET: '1'
-      MINIO_VERSION: v0.0.0-20250907161309-07c3a429bfed
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
-      - name: Restore pinned MinIO
-        id: minio
-        uses: actions/cache@v4
+      - name: Real release and race CLI acceptance against container
+        env:
+          BACKEND: ${{ matrix.backend }}
+          CONTAINER_RUNTIME: docker
+          VALET_S3_LOG_DIR: ${{ runner.temp }}/s3-${{ matrix.backend }}
+          TMPDIR: ${{ runner.temp }}
+        run: bash .github/scripts/test-s3-compatible.sh "$BACKEND"
+      - name: Upload backend acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          path: ~/.cache/valet-tools/minio
-          key: minio-${{ runner.os }}-${{ runner.arch }}-${{ env.MINIO_VERSION }}
-      - name: Build pinned MinIO from source
-        if: steps.minio.outputs.cache-hit != 'true'
-        run: GOBIN="$HOME/.cache/valet-tools" go install "github.com/minio/minio@$MINIO_VERSION"
-      - name: Start isolated object store
-        run: |
-          MINIO_ROOT_USER="$AWS_ACCESS_KEY_ID" MINIO_ROOT_PASSWORD="$AWS_SECRET_ACCESS_KEY" \
-            "$HOME/.cache/valet-tools/minio" server "$RUNNER_TEMP/minio-data" \
-            --address 127.0.0.1:19000 --console-address 127.0.0.1:19001 \
-            > "$RUNNER_TEMP/minio.log" 2>&1 &
-          curl --fail --retry 15 --retry-delay 1 --retry-connrefused http://127.0.0.1:19000/minio/health/ready
-      - name: Build acceptance CLI
-        run: go build -trimpath -ldflags="-s -w" -o dist/valet ./cmd/valet
-      - name: Real S3-compatible and validation-mode acceptance
-        env:
-          VALET_BINARY: ${{ github.workspace }}/dist/valet
-        run: go test -count=1 -tags integration ./integration -run '^(TestE2E[0-9]+S3|TestVM)' -v -timeout 20m
-      - name: Build race-instrumented acceptance CLI
-        env:
-          CGO_ENABLED: '1'
-        run: go build -race -trimpath -o dist/valet-race ./cmd/valet
-      - name: Real CLI race acceptance
-        env:
-          VALET_BINARY: ${{ github.workspace }}/dist/valet-race
-          GORACE: halt_on_error=1 atexit_sleep_ms=0
-        run: go test -count=1 -tags integration ./integration -run '^TestVM' -v -timeout 20m
+          name: s3-compatibility-${{ matrix.backend }}
+          path: ${{ runner.temp }}/s3-${{ matrix.backend }}/
+          if-no-files-found: warn
 
   generated-scale:
     needs: quality

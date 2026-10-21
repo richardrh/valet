@@ -19,6 +19,14 @@ This specification does not add connectors, parallel workers, spill-to-disk, aut
 
 The implementation MUST preserve these invariants:
 
+The publication requirements and historical REM acceptance cases below apply
+to runs with an explicit output destination. Stdout-first validation without
+one returns an aggregate JSON summary, no files/issue stream/manifest, and
+retains existing bounded schema/dataset diagnostics. It never claims artifact
+commitment; presentation failure is exit 2. JSON is the default stdout
+presentation; file summary export is additional. The exit-3 requirements below
+apply only after an actual artifact manifest commits.
+
 - **Bound before allocation.** Every allocation controlled by user input MUST have either an active managed-budget reservation covering its conservative peak or a fixed process-level bound established before allocation.
 - **One canonical interpretation.** URI identity, schema type names, and date directives MUST each have one shared parser/normalizer used by validation and execution.
 - **Pinned input.** Data used after discovery or inference MUST be the same data that established the schema and plan. Metadata aliases or same-size/same-mtime replacement MUST NOT bypass replay checks.

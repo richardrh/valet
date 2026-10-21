@@ -1,6 +1,6 @@
 ---
 title: Rules cookbook
-weight: 20
+weight: 40
 type: docs
 toc: true
 ---

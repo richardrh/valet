@@ -42,19 +42,24 @@ four rules and two required passes.
 ## Validate
 
 ```bash
-rm -rf demo-output demo-summary.json
-
-dist/valet validate \
-  -p examples/pipeline.yml \
-  -i examples/sample.csv \
-  -o demo-output \
-  --json-output demo-summary.json
-
-echo "exit=$?"
+if dist/valet validate \
+    -p examples/pipeline.yml \
+    -i examples/sample.csv \
+    > demo-summary.json
+then
+  code=0
+else
+  code=$?
+fi
+echo "exit=$code"
 ```
 
 Expected exit code: `1`. Validation completed successfully but found one
-error-level issue.
+error-level issue. The command returns one JSON summary on stdout. No output
+destination is configured, so Valet creates no files or manifest; the shell
+redirection saves the report as `demo-summary.json`.
+
+Selected report fields:
 
 ```json
 {
@@ -64,19 +69,55 @@ error-level issue.
   "pass": 3,
   "warn": 0,
   "error": 1,
-  "rows_scanned": 4,
+  "rows_scanned": 8,
   "passes": 2
 }
 ```
 
 ## Read the result
 
+```bash
+python3 -m json.tool demo-summary.json
+```
+
+For a pipeline gate, check the exit code: `0` permits the next step, `1` blocks
+it because checks failed, and `2` means validation could not complete or its
+stdout report could not be delivered. Exit `0` allows warnings; use
+`level: error` for checks that must block ingestion. Keep the input immutable
+between validation and your separate lakehouse upload.
+
+The report includes per-rule counts and coverage, not every row-level issue.
+See [CI automation](../../guides/ci/) for an exit-gated workflow.
+
+## Optional: write Parquet and detailed issues
+
+Add an output destination when you want rewritten data and row-level diagnostics:
+
+```bash
+if dist/valet validate \
+    -p examples/pipeline.yml \
+    -i examples/sample.csv \
+    -o demo-output \
+    > artifact-summary.json
+then
+  code=0
+else
+  code=$?
+fi
+echo "exit=$code"
+```
+
+This also exits `1`, but publishes Parquet pass/error buckets, detailed issues
+and a completion manifest. Stdout remains JSON. The default artifact mode is
+`all`; `--output-mode failures` omits passing rows, while `--output-mode report`
+keeps reports/issues but omits row files. Neither mode changes which checks run.
+
 Extract the terminal manifest without requiring `jq`:
 
 ```bash
 MANIFEST="$(python3 -c '
 import json
-with open("demo-summary.json") as f:
+with open("artifact-summary.json") as f:
     print(json.load(f)["manifest_uri"])
 ')"
 
@@ -100,8 +141,8 @@ entry points to an NDJSON part containing:
 
 ## Try schema-only checks on Parquet
 
-The run above writes Parquet bucket files. Select one committed **pass** part
-through the manifest, using Python only as a helper to read the JSON index:
+The optional artifact run above writes Parquet bucket files. Run that example
+first, then select one committed **pass** part through its manifest:
 
 ```bash
 PARQUET="$(python3 - "$MANIFEST" <<'PY'
@@ -153,7 +194,7 @@ value was validated. No new bucket files or manifest are created.
 To check the values in that Parquet part as well:
 
 ```bash
-dist/valet validate -p examples/parquet-schema.yml -i "$PARQUET" -o parquet-results/
+dist/valet validate -p examples/parquet-schema.yml -i "$PARQUET"
 ```
 
 Expected exit code: `0`, with three passing rows. See

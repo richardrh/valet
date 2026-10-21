@@ -1,8 +1,15 @@
 ---
 title: Guides
+linkTitle: Validation guides
 weight: 30
 type: docs
+sidebar:
+  open: true
 ---
+
+Start with pipeline configuration, then choose schema-only or full validation.
+The results guide explains which output to consume; operations, performance
+and CI cover running Valet reliably after the first successful check.
 
 {{< cards >}}
   {{< card link="configuration" title="Pipeline configuration" subtitle="YAML and JSON structure, sources, schemas and resource controls." >}}

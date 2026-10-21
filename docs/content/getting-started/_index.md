@@ -2,6 +2,8 @@
 title: Getting started
 weight: 10
 type: docs
+sidebar:
+  open: true
 next: getting-started/installation
 ---
 
@@ -21,6 +23,7 @@ JSON; both formats normalize to the same configuration and behavior.
 | You want to… | Command | Result |
 |---|---|---|
 | Check Parquet columns and types without reading values | `valet schema -p pipeline.yml -i input.parquet` | Schema-only JSON report; no data outputs |
+| Check values without publishing files | `valet validate -p pipeline.yml -i input.parquet` | One aggregate JSON summary on stdout; no manifest |
 | Check row values, conversions, references and dataset rules | `valet validate -p pipeline.yml -i input.parquet -o results/` | Checked rows, issues and a terminal manifest |
 | Preview configuration, schemas, passes and required state | `valet plan -p pipeline.yml -i input.parquet` | Execution-plan JSON; not a validation result |
 
@@ -33,8 +36,9 @@ checks supported without reading data.
 
 1. Optionally run `valet plan` to understand the work and managed state.
 2. Run `valet validate` to read, convert and check the data.
-3. Read the published `manifest.json`, then follow its artifact references.
-   Partial output without a terminal manifest is not a completed result.
+3. Without an output URI, read the aggregate stdout JSON; no files or manifest
+   are created. With `-o`/`output.uri`, read the published `manifest.json` and
+   follow its artifact references. Partial artifacts without it are incomplete.
 
 `valet schema` is separate: read its JSON report from stdout. It never publishes
 the normal row buckets or manifest.
@@ -43,8 +47,8 @@ the normal row buckets or manifest.
 
 | Exit | `valet schema` | `valet validate` |
 |---:|---|---|
-| `0` | Schema compatible; row checks were not evaluated | Completed without error-level violations |
-| `1` | Error-level schema mismatch; inspect the JSON report | Completed with row, dataset or schema violations; read the manifest |
-| `2` | Configuration, format, metadata, storage or resource failure | Pre-commit configuration, input, I/O, resource or publication failure |
+| `0` | Schema compatible; row checks were not evaluated | Completed without error-level violations; warnings allowed |
+| `1` | Error-level schema mismatch; inspect the JSON report | Completed with row, dataset or schema violations; inspect the summary |
+| `2` | Configuration, format, metadata, storage or resource failure | Operational or presentation failure without a committed manifest |
 | `3` | Not used: schema inspection commits no terminal manifest | Manifest committed, but stdout presentation failed |
 | `128+N` | Interrupted by signal `N` | Interrupted by signal `N` before commit |

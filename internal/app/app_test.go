@@ -6,6 +6,8 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -115,6 +117,91 @@ func TestRunPublishesAndClosesResources(t *testing.T) {
 		t.Errorf("batches written = %d, want 2", f.writer.batches)
 	}
 	assertClosed(t, map[string]bool{"store": f.store.closed, "dataset": f.ds.closed, "program": f.program.closed})
+}
+
+func TestRunReportsWithoutPublishing(t *testing.T) {
+	dir := t.TempDir()
+	input := filepath.Join(dir, "rows.csv")
+	if err := os.WriteFile(input, []byte("id\n1\n2\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{
+		Source: config.Source{URIs: []string{input}},
+		Output: config.Output{S3: config.S3{Profile: "valet-profile-that-does-not-exist"}},
+		Rules:  []config.Rule{{Code: "ONE", Level: "error", Column: "id", Checks: []config.Check{{Type: "equals", Params: map[string]any{"value": 1}}}}},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	summary, err := Run(context.Background(), Runtime{BeforeCommit: func(summary *data.Summary) error {
+		called = true
+		if summary.ManifestURI != "" || summary.OutputMode != "report" || summary.Total != 2 || summary.Errored != 1 {
+			t.Fatalf("completion summary = %+v", summary)
+		}
+		return nil
+	}}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !called || summary.ManifestURI != "" || summary.Passed != 1 || summary.Validation != data.ValidationFail {
+		t.Fatalf("report summary = %+v, callback called = %v", summary, called)
+	}
+	if got := summary.RowOutput["error"]; got.Policy != "omit_by_policy" || got.Omitted != 1 || got.Emitted != 0 {
+		t.Errorf("error materialization = %+v", got)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "rows.csv" {
+		t.Fatalf("stdout-only run created output: %v", entries)
+	}
+}
+
+func TestReportRetainsTypedRejectCountsWithoutArtifacts(t *testing.T) {
+	dir := t.TempDir()
+	input := filepath.Join(dir, "rows.csv")
+	if err := os.WriteFile(input, []byte("id\n1\nbad\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{
+		Source: config.Source{URIs: []string{input}},
+		Input: config.Input{OnTypeError: "row_error", Schema: &config.Schema{
+			Order: []string{"id"}, Columns: map[string]config.Column{"id": {Type: "int64"}},
+		}},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	summary, err := Run(context.Background(), Runtime{}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Total != 2 || summary.Passed != 1 || summary.Errored != 1 || summary.RowOutput["rejects"].Omitted != 1 {
+		t.Fatalf("typed report = %+v", summary)
+	}
+	callbackErr := errors.New("summary export failed")
+	summary, err = Run(context.Background(), Runtime{BeforeCommit: func(*data.Summary) error {
+		return callbackErr
+	}}, cfg)
+	if summary != nil || !errors.Is(err, callbackErr) {
+		t.Fatalf("failed completion summary = %+v, error = %v", summary, err)
+	}
+}
+
+func TestRunWithoutDestinationRejectsArtifactModes(t *testing.T) {
+	for _, mode := range []string{"all", "failures"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newFakes()
+			cfg := runConfig()
+			cfg.Output.URI, cfg.Output.Mode = "", mode
+			summary, err := f.deps().Run(context.Background(), Runtime{}, cfg)
+			if err == nil || summary != nil || f.opened != 0 {
+				t.Fatalf("summary = %+v, error = %v, resources opened = %d", summary, err, f.opened)
+			}
+		})
+	}
 }
 
 // assertClosed reports every named resource that was not released.

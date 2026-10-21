@@ -60,14 +60,15 @@ func openCSV(ctx context.Context, d *Dataset, obj storage.Object, o csvOptions) 
 // supplies the names.
 func newCSVInput(d *Dataset, src *textStream, o csvOptions) (out *csvInput, err error) {
 	c := &csvInput{d: d, src: src, nextLine: 1, workspace: highWater{budget: d.budget, phase: "CSV decoder buffers"}}
-	needed, sizeErr := decoderWorkspace(d.recordLimit, csvRecordCopies, d.recordLimit+1, csvDecoderFieldBytes)
-	if sizeErr != nil {
-		_ = c.close()
-		return nil, sizeErr
-	}
-	if err = c.workspace.growTo(needed); err != nil {
-		_ = c.close()
-		return nil, err
+	// Reserve before each read, not for the configured record ceiling. The
+	// limiter includes decoder read-ahead in n, so even buffered records and
+	// comma-only records are covered before encoding/csv can expand them.
+	src.limiter.reserve = func(n int64) error {
+		needed, sizeErr := decoderWorkspace(n, csvRecordCopies, n+1, csvDecoderFieldBytes)
+		if sizeErr != nil {
+			return sizeErr
+		}
+		return c.workspace.growTo(needed)
 	}
 	defer func() {
 		if err != nil {

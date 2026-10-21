@@ -1,6 +1,9 @@
 name: Test Pipeline
 version: "1.0"
 
+# No output URI: validate returns one aggregate JSON summary on stdout.
+# Add -o results/ to publish all row buckets, issues and a terminal manifest.
+
 rules:
   # Not null checks on record_id
   - code: RECORD_ID_REQUIRED

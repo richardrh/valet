@@ -84,6 +84,17 @@ request.
 - `engineering/validation-modes-spec.md` — report-version-2 output, schema-diff, diagnostics and trusted-statistics implementation contract.
 - `engineering/validation-modes-e2e.md` — real-CLI acceptance cases, independent oracles, fault scenarios and exercised gate evidence.
 
+### Navigation
+
+Keep `type: docs` on `content/_index.md` even though its layout is
+`hextra-home`. Hextra uses the homepage type to choose a site-wide sidebar;
+without it, desktop navigation is limited to the current first-level section.
+Getting Started and Validation Guides stay expanded, while `linkTitle` provides
+short sidebar labels without changing article titles or URLs. The navbar's
+Guides entry exposes that same guide tree in the mobile menu. The Reference
+landing page remains available but is excluded from the sidebar because its
+cards duplicate the actual pages.
+
 Use page-relative Markdown links or Hugo `relref` links. Do not duplicate
 normative rule or output behavior into multiple public pages; guides should
 summarize and link to the owning user-facing reference.

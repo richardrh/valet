@@ -37,14 +37,14 @@ input:
 
 output:
   uri: results/
-  mode: all                     # all | failures | report; default all
+  mode: all                     # all | failures | report; default all with URI, report without
   format: parquet
   parquet:
     statistics: none            # none | bounded; default none
 ```
 
 ```bash
-valet validate -p pipeline.yml --output-mode failures
+valet validate -p pipeline.yml -o results/ --output-mode failures
 valet validate -p pipeline.yml --output-mode report --parquet-stats trusted
 valet schema -p pipeline.yml --format text
 valet schema -p pipeline.yml --format json
@@ -54,8 +54,13 @@ valet validate -p pipeline.yml --log-format json --log-level debug
 CLI overrides pipeline configuration, which overrides defaults. Enum values are
 case-sensitive. Explicit empty/unknown values fail with exit 2; they do not fall
 back to defaults. Existing size, worker and input/output-overlap validation stays
-in force in every output mode. Report-only still publishes a result destination;
-it is not a stdout-only alternative to `schema`.
+in force in every output mode. Without an output URI, default/explicit `report`
+returns one aggregate stdout JSON summary: no sink/output AWS client, files,
+manifest or per-row issue retention. With a URI, the omitted mode defaults to
+`all` and report mode still publishes reports/issues and a manifest. Resolve
+the default after CLI overrides. Validate rejects explicit `all`/`failures`
+without a URI at run entry; plan/schema may still inspect such configuration.
+This remains full validation, not schema-only inspection.
 
 - `--output-mode` and `--parquet-stats` apply to `validate`. `plan` also accepts
   them and describes the selected materialization/trust policy without executing
@@ -164,6 +169,16 @@ URI, format, record count, byte size and SHA-256. No omitted bucket gets a fake
 empty file or reference.
 
 ## 4. Output modes
+
+The following artifact policy applies when an output URI is supplied. Without
+one, retain aggregate counts/coverage/trust/provenance and existing bounded
+schema/dataset diagnostics, but create no row, issue, reject, metadata or
+evidence files and omit `manifest_uri`. JSON is stdout's default; plain/stats
+remain opt-in presentations. `--json-output PATH` adds a summary file,
+`--json-output -` explicitly selects JSON (conflicting with `--plain`), and
+explicit JSON overrides stats' implied plain presentation. Stdout failure is
+exit 2 without a committed manifest; exit 3 requires actual artifact commit.
+
 
 | Mode | Pass rows | Warning rows | Error rows | Raw rejects | Issues and reports |
 |---|---|---|---|---|---|

@@ -12,6 +12,12 @@ next: guides/performance
 Leave headroom for the Go runtime, stacks, allocator retention, SDK state and
 filesystem/network buffers.
 
+CSV decoder reservations grow before reads according to admitted record bytes
+and bounded read-ahead, rather than reserving the maximum permitted record size
+up front. The high-water reservation remains while decoder buffers are retained.
+A large `max_record_bytes` ceiling therefore does not by itself imply an equally
+large allocation or resident-memory footprint.
+
 > [!IMPORTANT]
 > The limits below are for **one decompressed row or record**, not for the
 > whole file. Valet streams input and has no configured whole-file size ceiling.
@@ -132,6 +138,8 @@ stdout failure still reports the already committed manifest.
 
 ## Health checks for batch jobs
 
-Treat exits `0` and `1` as completed runs and read their manifests. Treat exit
-`2` and signal exits as uncommitted failures. Exit `3` means the manifest is
-already authoritative even though stdout presentation failed.
+Treat exits `0` and `1` as completed validation: `0` allows warnings and `1`
+means failed checks. Read stdout JSON for aggregate-only runs, or the manifest
+for explicit-output runs. Exit `2` includes operational/presentation failure
+without a committed manifest; signal exits indicate interruption. Exit `3`
+means an artifact manifest is already authoritative even though stdout failed.

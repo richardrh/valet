@@ -20,11 +20,13 @@ import (
 // version; cli installs Log from the logging flags. Log always writes to Stderr
 // so Stdout stays reserved for summaries, plans and JSON.
 type Runtime struct {
-	Log          *slog.Logger
-	Stdout       io.Writer
-	Stderr       io.Writer
-	Version      string
-	RunID        string
+	Log     *slog.Logger
+	Stdout  io.Writer
+	Stderr  io.Writer
+	Version string
+	RunID   string
+	// BeforeCommit receives the finalized summary before artifact commitment,
+	// or before returning a completed stdout-only report.
 	BeforeCommit func(*data.Summary) error
 }
 
@@ -89,7 +91,11 @@ type Deps struct {
 func Production() Deps {
 	return Deps{
 		OpenStorage: func(ctx context.Context, cfg *config.Config, budget *resource.Budget, log *slog.Logger) (Store, error) {
-			store, err := storage.New(ctx, cfg.Source.S3, cfg.Output.S3, budget, storage.WithLogger(log))
+			output := cfg.Source.S3
+			if cfg.Output.URI != "" {
+				output = cfg.Output.S3
+			}
+			store, err := storage.New(ctx, cfg.Source.S3, output, budget, storage.WithLogger(log))
 			if err != nil {
 				return nil, err
 			}

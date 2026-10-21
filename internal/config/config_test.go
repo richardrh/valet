@@ -66,6 +66,31 @@ func assertErrorContains(t *testing.T, what string, err error, wants ...string) 
 	}
 }
 
+func TestOutputModeDefaultsAfterDestinationOverride(t *testing.T) {
+	for _, tc := range []struct {
+		name, document, destination, mode string
+	}{
+		{name: "stdout", document: "source: {uris: [rows.csv]}\n", mode: "report"},
+		{name: "override destination", document: "source: {uris: [rows.csv]}\n", destination: "out", mode: "all"},
+		{name: "configured destination", document: "source: {uris: [rows.csv]}\noutput: {uri: out}\n", destination: "out", mode: "all"},
+		{name: "clear destination", document: "source: {uris: [rows.csv]}\noutput: {uri: out}\n", mode: "report"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := loadText(t, tc.document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg.Output.URI = tc.destination
+			if err := cfg.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Output.Mode != tc.mode {
+				t.Errorf("effective output mode = %q, want %q", cfg.Output.Mode, tc.mode)
+			}
+		})
+	}
+}
+
 func TestLoadDefaultsAndOverrideBoundary(t *testing.T) {
 	cfg, err := loadText(t, `name: Example
 execution: {memory_budget: invalid, workers: 0}

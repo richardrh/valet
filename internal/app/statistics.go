@@ -82,6 +82,9 @@ func applyGroupEvidence(program Program, batch *data.Batch) error {
 }
 
 func writeEvaluatedBatch(ctx context.Context, cfg *config.Config, writer Writer, batch *data.Batch, result *data.Result) error {
+	if writer == nil {
+		return nil
+	}
 	if batch.Evidence != nil && cfg.Input.Parquet.Statistics == "trusted" {
 		evidence, ok := writer.(evidenceWriter)
 		if !ok {
@@ -101,6 +104,9 @@ func writeEvaluatedBatch(ctx context.Context, cfg *config.Config, writer Writer,
 }
 
 func writeRunInputs(writer Writer, objects []storage.Object, summary *data.Summary, budget *resource.Budget) error {
+	if writer == nil {
+		return nil
+	}
 	if summary.Status != data.StatusSchemaRejected {
 		return writer.WriteInputs(objects)
 	}

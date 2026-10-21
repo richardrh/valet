@@ -153,21 +153,42 @@ func (e *objectEnv) cleanup(t testing.TB) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	p := s3.NewListObjectsV2Paginator(e.client, &s3.ListObjectsV2Input{
-		Bucket: aws.String(e.bucket),
-		Prefix: aws.String(e.prefix),
-	})
-	for p.HasMorePages() {
-		page, err := p.NextPage(ctx)
+	for {
+		// Delete a bounded page, then relist: cleanup must not depend on
+		// continuation-token behavior after the listed objects are removed.
+		page, err := e.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+			Bucket:  aws.String(e.bucket),
+			Prefix:  aws.String(e.prefix),
+			MaxKeys: aws.Int32(1000),
+		})
 		if err != nil {
 			t.Errorf("cleaning isolated objects: %v", err)
 			return
 		}
-		for _, o := range page.Contents {
-			object := &s3.DeleteObjectInput{Bucket: aws.String(e.bucket), Key: o.Key}
-			if _, err := e.client.DeleteObject(ctx, object); err != nil {
-				t.Errorf("delete isolated object: %v", err)
+		if len(page.Contents) == 0 {
+			break
+		}
+		objects := make([]types.ObjectIdentifier, 0, len(page.Contents))
+		for _, object := range page.Contents {
+			if !strings.HasPrefix(aws.ToString(object.Key), e.prefix) {
+				t.Errorf("refusing cleanup outside owned prefix: %q", aws.ToString(object.Key))
+				return
 			}
+			objects = append(objects, types.ObjectIdentifier{Key: object.Key})
+		}
+		deleted, err := e.client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+			Bucket: aws.String(e.bucket),
+			Delete: &types.Delete{Objects: objects, Quiet: aws.Bool(true)},
+		})
+		if err != nil {
+			t.Errorf("delete isolated objects: %v", err)
+			return
+		}
+		for _, failure := range deleted.Errors {
+			t.Errorf("delete isolated object %q: %s: %s", aws.ToString(failure.Key), aws.ToString(failure.Code), aws.ToString(failure.Message))
+		}
+		if len(deleted.Errors) != 0 {
+			return
 		}
 	}
 	uploads, err := e.client.ListMultipartUploads(ctx, &s3.ListMultipartUploadsInput{

@@ -6,7 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.0-rc.1] - 2026-10-21
+
 ### Added
+
+- Stdout-first `validate`: no output URI returns one aggregate JSON summary
+  without artifact files, per-row issue lists or a manifest. Destination-aware
+  defaults select `report` without a URI and `all` with one; `all`/`failures`
+  require a destination. Explicit artifact publication remains manifest-last.
+- JSON stdout is the validation default; `--plain` preserves key=value output,
+  `--stats` implies plain/statistics unless JSON is explicit, and
+  `--json-output PATH` adds a summary file without replacing JSON stdout.
+  Presentation failure returns exit `2` without a committed manifest and
+  exit `3` only after an artifact manifest commits.
+- Added a security reporting and supported-version policy with private GitHub
+  vulnerability reporting.
+- Required release and race CLI acceptance against independent MinIO and RustFS
+  containers, with pinned source/image, retained backend evidence and no skipped
+  selected tests; AWS-specific verification remains outside the release scope.
 
 - Go implementation of validnator's YAML/JSON pipeline validation using Apache Arrow Go, with a pure-Go CLI and internal reusable packages.
 - Local/S3 CSV, Parquet, streaming JSON and NDJSON ingestion; explicit schemas, exact integer/decimal conversion and recoverable ingestion rejects.
@@ -14,7 +31,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Streamed CSV/Parquet results, issues and reject diagnostics with manifest-last publication and cancellation cleanup.
 - Structured `log/slog` logging on stderr (`-v/--verbose`, `--log-level`, `--log-format text|json`) with run-scoped `run_id`, validnator-compatible `--plain` key=value summaries, `--stats` per-rule failure counts, `input.type` inference from the source suffix, and signal-specific exit codes (130 SIGINT, 143 SIGTERM).
 - Colocated tests, CLI/S3 acceptance scenarios, independent Parquet verification hooks and opt-in generated 100 GiB scale testing.
-- Linux amd64/arm64 and Windows amd64 build/test workflow, darwin cross-builds, formatting/vet/race quality gates, source-built MinIO integration, and optional 100 GiB scale acceptance.
+- Linux amd64/arm64 and Windows amd64 build/test workflow, darwin cross-builds, formatting/vet/race quality gates, independent MinIO/RustFS container integration, and optional 100 GiB scale acceptance.
 - First-class strict JSON pipeline documents alongside YAML, using one normalized validation path and equivalent examples/tests.
 - Exclusive numeric range bounds for direct `>`, `<`, and open-interval assertions, plus a runnable rules cookbook and orders fixture.
 - Added gated version-tag GitHub releases with five platform archives and SHA-256 checksums, reusable CI with pinned vulnerability/workflow checks, and read-only PR documentation builds with main-only GitHub Pages deployment.
@@ -36,12 +53,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Size CSV decoder reservations from admitted record bytes and read-ahead rather
+  than the configured maximum record size, retaining pre-allocation budget checks
+  and oversized-record rejection.
 - Preserved unread Parquet rows when mixed physical schemas switch between lexical conversion and native decoding; added an end-to-end regression comparing independently counted input rows with checked and published rows, including values and provenance.
 - Enabled cgo specifically for CI race tests while retaining cgo-free distribution builds; corrected the Hugo cache context and documented first-push, Pages, and release setup.
 - Made `plan` stop reporting validation/prepasses after ingestion schema rejection, consistently with execution.
 - Preserved inference/prepass/final decoded-row visit counts and deferred baseline pass counts; corrected diagnostic metadata/payload and accepted-manifest byte attribution.
 - Made publication fault injection portable across path separators and special-file rejection tests independent of diagnostic wording on Windows.
 - Compared native provenance paths using the selected CSV backslash encoding in cross-platform end-to-end checks.
+- Made documentation navigation site-wide instead of section-scoped, with expanded groups, concise sidebar labels and the full guide tree available on mobile.
 - Bounded context expansion and CSV/JSON decoder growth before allocation; pipeline special files are rejected without blocking cancellation.
 - Unified schema type aliases and date directives across validation, source conversion and checks; corrected civil dates, timezone abbreviations, Parquet temporals, binary references and issue-column attribution.
 - Canonicalized local/S3 overlap and suffix handling, pinned inference replay identity, counted all Parquet scans, and included ignored Parquet columns in record limits.

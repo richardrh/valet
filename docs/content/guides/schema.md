@@ -1,5 +1,6 @@
 ---
 title: Schema-only Parquet checks
+linkTitle: Parquet schema checks
 weight: 15
 type: docs
 prev: guides/configuration
@@ -262,7 +263,9 @@ schema command lists it as not evaluated. To execute it and publish row outputs:
 valet validate -p examples/parquet-schema.yml -i input.parquet -o results/
 ```
 
-Full validation scans the rows, performs any configured conversion and data
-checks, and publishes a terminal manifest. See [structured output](../output/)
+Full validation scans the rows and performs configured conversion and data
+checks. The explicit `-o` above also publishes a terminal manifest; omit the
+output URI for an aggregate-only stdout JSON summary with no files or manifest.
+See [structured output](../output/)
 for consuming those results, or [quickstart](../../getting-started/quickstart/#try-schema-only-checks-on-parquet)
 to try both commands using generated sample Parquet data.

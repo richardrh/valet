@@ -1,13 +1,17 @@
 ---
 title: CI automation
+linkTitle: CI & releases
 weight: 40
 type: docs
 prev: guides/performance
 ---
 
-For **full validation** (`valet validate`), exit `0` means data validation passed
-and exit `1` means it completed with error-level issues. Both publish a terminal
-manifest and structured artifacts. Exit `2` means no result committed.
+For **full validation** (`valet validate`), exit `0` means no error-level
+failures (warnings are allowed), and `1` means completed with failed checks.
+Without an output URI, consume the single stdout JSON summary; no files or
+manifest are created. Explicit `-o`/`output.uri` selects manifest-last artifact
+publication. Exit `2` includes operational or presentation failure without a
+committed manifest; exit `3` means artifacts committed but stdout failed.
 
 For a **schema-only gate**, run `valet schema` and consume its stdout JSON
 instead: exit `0` means schema compatibility, `1` an error-level schema mismatch,
@@ -17,8 +21,10 @@ supported checks and report contract.
 
 ## GitHub Actions example
 
-This workflow builds Valet, validates a repository fixture, uploads the terminal
-result and fails the job when data validation fails.
+This workflow builds Valet, captures its stdout report, uploads that report for
+inspection and fails the job when data validation fails. The bundled fixture
+intentionally exits `1` because a record ID is missing. Omit `output.uri` from
+your pipeline to use this aggregate-only path.
 
 ```yaml
 name: Validate data
@@ -46,10 +52,11 @@ jobs:
         run: |
           set +e
           dist/valet validate \
-            -p validation/pipeline.yml \
-            -i data/input.csv \
-            -o validation-output \
-            --json-output validation-summary.json
+            -p examples/pipeline.yml \
+            -i examples/sample.csv \
+            --log-format json \
+            > validation-summary.json \
+            2> validation.log.ndjson
           code=$?
           set -e
 
@@ -58,14 +65,14 @@ jobs:
             exit "$code"
           fi
 
-      - name: Upload validation result
+      - name: Upload validation report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: validation-result
           path: |
-            validation-output/
             validation-summary.json
+            validation.log.ndjson
           if-no-files-found: warn
 
       - name: Enforce data quality
@@ -75,8 +82,17 @@ jobs:
 
 ## Consume the summary
 
-`--json-output` writes the stable summary contract. Read `manifest_uri` from the
-summary, then follow the manifest's checksummed `artifacts` reference.
+The workflow saves the default stdout JSON with shell redirection. The shell
+creates that file; Valet itself creates no report directory or manifest.
+Operational failures may leave an empty or incomplete redirected file: parse
+the report only after exit `0` or `1`. After an operational failure, inspect
+stderr instead.
+
+Gate a separate lakehouse ingestion step on successful validation. In the
+workflow above, place ingestion after **Enforce data quality** so normal
+GitHub Actions failure handling blocks it when checks fail. Use `level: error`
+for mandatory checks; warning-level failures still permit exit `0`. Upload
+the same immutable input that Valet checked.
 
 ```bash
 python3 - <<'PY'
@@ -85,13 +101,19 @@ with open("validation-summary.json") as stream:
     summary = json.load(stream)
 print(summary["validation"])
 print(summary["error"])
-print(summary["manifest_uri"])
+print(summary["rule_counts"])
 PY
 ```
 
-For row-level details, read the artifact entries with `kind: issues` or
-`kind: rejects`. Do not discover a completed run by listing output files; only
-a durable `manifest.json` marks a consumable result.
+For artifact runs, read entries with `kind: issues` or `kind: rejects` for
+row-level details. Do not discover a committed artifact run by listing files;
+only its durable `manifest.json` marks a consumable artifact result.
+
+To request those artifact files, explicitly add `-o validation-output` and
+include `validation-output/` in the uploaded paths. The stdout summary then
+includes `manifest_uri`. `--output-mode report` with that destination publishes
+detailed issues and reports without rewriting row data; omit the destination
+entirely when the caller only needs the aggregate report.
 
 ## JSON logs
 
@@ -130,13 +152,21 @@ fit a runner's preinstalled toolchain.
   acceptance against the version-stamped binaries that become release assets.
 - Darwin amd64 and arm64 are cross-built and their tests compiled on Linux.
   They are not executed on macOS, code-signed or notarized.
-- S3-compatible acceptance runs against an isolated, pinned MinIO instance
-  with local-only credentials. It runs the `TestVM` feature gates against both
-  a release binary and a separately race-instrumented child CLI. The dedicated
-  backend permits creating owned versioned test buckets through
-  `VALET_S3_CREATE_VERSIONED_BUCKET=1`; shared user buckets are never reconfigured.
-  This is not real AWS verification. Actual AWS tests require explicit opt-in,
-  a bucket and scoped credentials; unavailable services are not verified.
+- S3-compatible acceptance is a required two-backend container matrix:
+  MinIO source `07c3a429bfed` and RustFS 1.0.3. RustFS is pinned by an immutable
+  image digest. MinIO is built from the existing pinned source into a scratch
+  container because its official release image is no longer publicly pullable;
+  no outdated third-party image is silently substituted.
+  Each backend runs the real S3, validation-mode and stdout-only cases against
+  release and race-instrumented child CLIs, including owned versioned buckets.
+  Local-only credentials and loopback bindings isolate the servers. A selected
+  test skip or missing test run fails the gate. JSON test events and server logs
+  are uploaded as `s3-compatibility-minio` and `s3-compatibility-rustfs`.
+  Shared user buckets are never reconfigured.
+- AWS verification is outside this release scope, not a prerequisite.
+  Optional AWS tests require explicit opt-in, a bucket and scoped credentials;
+  they are excluded from the compatible-server gate and never counted as
+  verified. MinIO/RustFS results do not establish AWS IAM/KMS behavior.
 - The generated scale workload is opt-in through the CI manual dispatch
   `run_scale` input. It generates separate 10 GiB and 100 GiB Arrow streams;
   normal CI and releases do not run this workload.
@@ -215,8 +245,8 @@ tagged revision before packaging. It produces:
 - `valet_<tag>_darwin_arm64.tar.gz`
 - `checksums.txt`, containing the SHA-256 of each archive.
 
-Each archive contains the executable, `README.md`, `CHANGELOG.md` and the
-project's MIT `LICENSE`. Third-party dependencies retain their respective
+Each archive contains the executable, `README.md`, `CHANGELOG.md`, `SECURITY.md`
+and the project's MIT `LICENSE`. Third-party dependencies retain their respective
 licenses. See the [installation guide](../../getting-started/installation/)
 for download and checksum verification instructions. Checksums are not
 signatures or attestations.

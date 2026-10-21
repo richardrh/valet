@@ -36,8 +36,11 @@ to run" is not a passing feature gate.
   before the outer test deadline. A harness timeout is failure, not exit 2/130.
 - Decode stdout as exactly one JSON value when JSON is selected; reject trailing
   log records. Parse every stderr NDJSON record independently in JSON-log cases.
-- Discover the terminal manifest first and follow its references. Do not accept
-  orphan files as a completed result or assume a particular part count/filename.
+- For explicit-output runs, discover the terminal manifest first and follow its
+  references. Do not accept orphan files as completed artifact results or
+  assume a particular part count/filename. Without an output URI, assert one
+  aggregate JSON summary, absent `manifest_uri`, no created artifact files,
+  no per-row issue list, and truthful `manifest_committed: false` logs.
 - Verify every referenced byte size and SHA-256. Independently decode each row
   artifact and check literal expected values, validity, types, order and source
   provenance. Artifact counts must equal decoded records; issue/evidence counts
@@ -176,6 +179,10 @@ Snappy/Zstd/uncompressed, V1/V2 and dictionary variations where indicated.
 | VM-OUT-10 | Metadata/index/manifest publication denied, then stdout pipe closed after successful commit | Publication failure: exit 2, no manifest. Closed stdout: exit 3 with a valid fully referenced manifest in every mode, not SIGPIPE exit. |
 | VM-OUT-11 | SIGINT/SIGTERM during blocked input and multipart output | Correct signal exit, bounded termination, no terminal manifest, no live child/upload left after cleanup; partial artifacts are never collected as results. |
 | VM-OUT-12 | Empty, all-warning and all-error inputs | Correct zero/nonzero counts and exit; no placeholder empty row files; warning rows are included by failures-only; report-only remains free of raw row artifacts. |
+| VM-OUT-13 | No output URI, default/explicit report, ordinary and trusted validation | Same aggregate outcomes, coverage, trust and provenance as matching artifact runs; no metadata, row/reject/issue/evidence files or output AWS client; no manifest URI; no retained row issue list. |
+| VM-OUT-14 | No URI with explicit all/failures; destination supplied by CLI override | Missing destination exits 2 at validate entry while plan/schema can inspect config; supplying URI resolves omitted mode to all and publishes artifacts. |
+| VM-OUT-15 | Default JSON, plain/stats, JSON stdout/file and conflicting plain/JSON stdout | Exactly one stdout JSON by default, including artifact runs; plain/stats retain existing presentation; explicit JSON overrides stats; file export is additional; plain plus JSON stdout rejects. |
+| VM-OUT-16 | Closed stdout without output URI | Exit 2, never 3; no manifest/files or false committed terminal log. Warnings alone exit 0; failed checks exit 1. |
 
 ## 4. Schema-diff acceptance
 
@@ -215,7 +222,7 @@ These are executable `schema` invocations, not formatter-unit snapshots.
 
 | ID | Scenario | Required observable result |
 |---|---|---|
-| VM-STAT-01 | F-FAST, trusted report and failures modes; payload GETs denied | Exit 0 and committed report, zero value rows, eight metadata-claimed rows, two skips; no payload request/full digest, no fake pass rows; complete evidence/trust policy. Exercise JSON, default human and plain output with logs suppressed. |
+| VM-STAT-01 | F-FAST, trusted report and failures modes with output URI; payload GETs denied | Exit 0 and committed report, zero value rows, eight metadata-claimed rows, two skips; no payload request/full digest, no fake pass rows; complete evidence/trust policy. Exercise default JSON and explicit plain/stats output with logs suppressed. |
 | VM-STAT-02 | F-STAT mixed groups | Exact 12 decoded/4 claimed/16 accounted rows and three real failures; one skipped/three scanned groups. Deny group-0 payload only; read the rest; verify per-rule coverage, issue coordinates and human/plain disclosure. |
 | VM-STAT-03 | Positive bounds but absent null_count; payload contains a null | Unknown rather than implicit zero; scans reveal NOT_NULL failure; denied fallback reads give exit 2. Include a multi-column rule whose first column proves pass but second has missing/contrary evidence. |
 | VM-STAT-04 | All-null group with absent bounds; null allowed versus nullable:false/NOT_NULL | Range-only/null-allowed group may be metadata-accepted. A null constraint forces decoding and exact ingestion/rule issues, not a guessed issue count or location. |
@@ -342,17 +349,19 @@ not silently reported as executed on Windows.
 Required release gates:
 
 - Local cases on Linux amd64/arm64 and Windows amd64, using the native artifact.
-- Real MinIO cases on Linux, with pinned backend, scoped credentials and owned
-  namespaces. Keep local and object-store gates separately visible.
+- Real MinIO and RustFS cases on Linux, with pinned source/image, scoped local
+  credentials and owned namespaces. Require both independent containers; keep
+  local and backend gates separately visible. Selected skips fail the gate.
 - A race-instrumented CLI run of concurrency, lifecycle, range/digest, evidence
   and structured-log cases, not only package-level race tests.
 - Current acceptance suite remains passing with migrated version-2 consumers.
 - Production docs/examples cover real new flags and clarify metadata trust;
   example commands must be exercised rather than only building Markdown.
 
-AWS is explicit opt-in and reported separately. Darwin cross-compilation is not
-native execution. If a mandatory environment is unavailable, the gate is not
-verified; do not convert an all-skipped/zero-test run into release success.
+AWS is outside the required release scope: explicit opt-in only, unverified
+unless actually exercised, and never counted as compatible-container evidence.
+Darwin cross-compilation is not native execution. If a mandatory environment is
+unavailable, the gate is not verified; all-skipped/zero-test runs cannot pass.
 Archive CLI version, target/toolchain, test IDs/results, source/fixture descriptor,
 exit status, parsed reports/logs and backend request traces needed for diagnosis.
 Never archive secret credentials or raw sensitive production data.

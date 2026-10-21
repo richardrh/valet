@@ -1,19 +1,31 @@
 ---
 title: Structured output
+linkTitle: Results & reports
 weight: 20
 type: docs
 prev: guides/validation-modes
 next: guides/operations
 ---
 
-This page describes **full validation** (`valet validate`). Consume those
-results through `manifest.json`; ignore partial output without a terminal
-manifest.
+This page describes **full validation** (`valet validate`). Without `-o` or
+`output.uri`, it writes one aggregate JSON summary to stdout and creates no
+artifact files, metadata, evidence ledger, detailed per-row issue list or
+manifest. Validation still runs normally, retaining counts, coverage, trust,
+provenance and bounded schema/dataset summary diagnostics.
 
-Use `--output-mode all` (default) for all row buckets, `failures` for warning and
-error rows only, or `report` to omit row files and raw rejects while keeping
-issues, indexes, summary and the manifest. See [output modes and metadata trust](../validation-modes/)
-for the exact policy and its separate value/statistics coverage.
+With an output URI, consume results through `manifest.json`; ignore partial
+artifacts without a terminal manifest. `--output-mode all` writes all row
+buckets, `failures` writes warning/error rows, and `report` omits row files and
+raw rejects while keeping issues, indexes, summary and manifest. The default
+mode resolves after overrides: no URI means `report`; a URI means `all`.
+Explicit `all`/`failures` without a URI is rejected by `validate`.
+See [output modes and metadata trust](../validation-modes/).
+
+Stdout defaults to JSON regardless of artifact selection. `--plain` selects
+`key=value`; `--stats` implies plain/statistics output unless JSON is explicitly
+requested. `--json-output -` explicitly selects JSON stdout and conflicts with
+`--plain`. `--json-output PATH` requests an additional summary file; stdout
+remains JSON. Shell redirection can also save the stdout summary.
 
 ## Schema-only output is different
 
@@ -31,6 +43,8 @@ comes from the footer. The [schema-only guide](../schema/#read-the-json-report)
 explains `checks`, `schema_issues`, `not_evaluated` and schema-command exit codes.
 
 ## Publication tree
+This tree exists only with an explicit output URI:
+
 
 ```text
 <output>/<run-id>/
@@ -58,7 +72,7 @@ emitted/omitted decoded-row counts.
 
 ## Summary
 
-`summary.json` reports:
+The stdout summary (and `summary.json` when publishing artifacts) reports:
 
 - terminal status and validation outcome;
 - unique final-pass value-evaluated total/pass/warning/error counts;
@@ -67,7 +81,7 @@ emitted/omitted decoded-row counts.
 - not-applicable and unevaluable counts;
 - dataset/schema outcomes;
 - managed-memory peak;
-- terminal manifest URI.
+- terminal manifest URI, only when artifacts are committed;
 - report version `2`, output mode, trust policy and verification scope;
 - separate value-derived and footer-claimed coverage, including per-rule coverage;
 - row materialization policy and emitted/omitted counts.
@@ -127,11 +141,11 @@ stderr with `--log-format json`.
 
 | Exit | Consumer action |
 |---:|---|
-| `0` | Consume the manifest; validation passed |
-| `1` | Consume the manifest; validation found error-level issues |
-| `2` | No terminal result; inspect stderr and retry only after remediation |
-| `3` | Manifest committed; consume it instead of rerunning validation |
-| `128+N` | Interrupted before commit; no terminal result |
+| `0` | Completed without error-level failures; warnings are allowed |
+| `1` | Completed with error-level row, dataset or schema failures |
+| `2` | Operational/presentation failure with no committed manifest; inspect stderr |
+| `3` | Artifact manifest committed but stdout presentation failed; consume it |
+| `128+N` | Interrupted before commit; no terminal artifact result |
 
 ## Output formats
 

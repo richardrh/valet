@@ -62,8 +62,8 @@ func (d Deps) Run(ctx context.Context, rt Runtime, cfg *config.Config) (summary 
 	if err = checkStart(ctx, cfg); err != nil {
 		return nil, err
 	}
-	if cfg.Output.URI == "" {
-		return nil, errors.New("output.uri or --output is required for validation")
+	if cfg.Output.URI == "" && cfg.Output.Mode != "report" {
+		return nil, errors.New("output.uri or --output is required for output.mode all or failures")
 	}
 	runID := rt.RunID
 	if runID == "" {
@@ -80,12 +80,16 @@ func (d Deps) Run(ctx context.Context, rt Runtime, cfg *config.Config) (summary 
 	if err = d.open(ctx, s, cfg, false); err != nil {
 		return nil, err
 	}
-	writer, err = d.OpenSink(ctx, cfg, s.store, s.budget, runID, s.ds.Schema(), log)
-	if err != nil {
-		return nil, fmt.Errorf("open output: %w", err)
+	var issueSink func(data.Issue) error
+	if cfg.Output.URI != "" {
+		writer, err = d.OpenSink(ctx, cfg, s.store, s.budget, runID, s.ds.Schema(), log)
+		if err != nil {
+			return nil, fmt.Errorf("open output: %w", err)
+		}
+		issueSink = writer.WriteIssue
 	}
 	// checks logs compilation and preflight; app only logs steps it owns.
-	program, err = d.Compile(ctx, cfg, s.ds, s.store, s.budget, log, writer.WriteIssue)
+	program, err = d.Compile(ctx, cfg, s.ds, s.store, s.budget, log, issueSink)
 	if err != nil {
 		return nil, fmt.Errorf("compile checks: %w", err)
 	}
@@ -140,11 +144,20 @@ func (d Deps) Run(ctx context.Context, rt Runtime, cfg *config.Config) (summary 
 	if err = ctx.Err(); err != nil {
 		return nil, err
 	}
+	if writer == nil {
+		if err = finalizeReportSummary(summary); err != nil {
+			return nil, fmt.Errorf("finalize report: %w", err)
+		}
+	}
 	summary.DurationSeconds = time.Since(started).Seconds()
 	summary.ManagedPeak = s.budget.Peak()
-	summary.ManifestURI, err = writer.Complete(summary, rt.BeforeCommit)
+	if writer != nil {
+		summary.ManifestURI, err = writer.Complete(summary, rt.BeforeCommit)
+	} else if rt.BeforeCommit != nil {
+		err = rt.BeforeCommit(summary)
+	}
 	if err != nil {
-		return nil, fmt.Errorf("publish result: %w", err)
+		return nil, fmt.Errorf("complete result: %w", err)
 	}
 	completed = true
 	// sink logs the manifest URI; this is the run-level outcome.

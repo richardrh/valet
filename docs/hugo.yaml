@@ -23,11 +23,11 @@ menu:
     - name: Documentation
       pageRef: /getting-started
       weight: 1
+    - name: Guides
+      pageRef: /guides
+      weight: 2
     - name: Rules
       pageRef: /rules
-      weight: 2
-    - name: Operations
-      pageRef: /guides/operations
       weight: 3
     - name: Search
       weight: 4

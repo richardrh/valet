@@ -585,6 +585,37 @@ func (r *countingReadCloser) Read(p []byte) (int, error) {
 
 func (*countingReadCloser) Close() error { return nil }
 
+func TestCSVDecoderWorkspaceTracksReadAheadAndRejectsGrowth(t *testing.T) {
+	budget := resource.New(512 << 10)
+	d := &Dataset{budget: budget, recordLimit: 8 << 20}
+	reader := &countingReadCloser{reader: strings.NewReader("column\nsmall\n" + strings.Repeat("x", 64<<10) + "\n")}
+	src, err := newTextStream(d, storage.Object{URI: "rows.csv"}, reader, textReadBufferBytes, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := newCSVInput(d, src, csvOptions{comma: ','})
+	if err != nil {
+		t.Fatalf("small header with large record ceiling: %v", err)
+	}
+	if _, err = input.next(context.Background()); err != nil {
+		t.Fatalf("small record: %v", err)
+	}
+	_, err = input.next(context.Background())
+	var limit *resource.ResourceLimitError
+	if !errors.As(err, &limit) {
+		t.Fatalf("growing record error = %v, want *resource.ResourceLimitError", err)
+	}
+	if reader.bytes >= 64<<10 {
+		t.Fatalf("read %d bytes before rejecting growth, want less than growing record", reader.bytes)
+	}
+	if err := input.close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := budget.Used(); got != 0 {
+		t.Fatalf("budget used after close = %d, want 0", got)
+	}
+}
+
 func TestCSVDecoderReservesBeforeRead(t *testing.T) {
 	budget := resource.New(64 << 10)
 	d := &Dataset{budget: budget, recordLimit: 1 << 20}

@@ -167,6 +167,7 @@ func TestArgumentErrors(t *testing.T) {
 		{name: "plan with --json-output", args: []string{"plan", "-p", "anything", "--json-output", "summary.json"}},
 		{name: "stdin input", args: []string{"validate", "-p", "anything", "-i", "-"}},
 		{name: "stdout output", args: []string{"validate", "-p", "anything", "-o", "-"}},
+		{name: "conflicting stdout presentation", args: []string{"validate", "-p", "anything", "--plain", "--json-output", "-"}},
 		{name: "unknown log format", args: []string{"validate", "-p", "anything", "--log-format", "xml"}},
 		{name: "unknown log level", args: []string{"validate", "-p", "anything", "--log-level", "trace"}},
 		{
@@ -211,7 +212,6 @@ rules: []
 		"--batch-target", "64KiB",
 		"--workers", "1",
 		"--json-output", "-",
-		"--plain",
 		"--verbose",
 	)...)
 	assertExit(t, r, ExitOK)
@@ -285,8 +285,9 @@ rules:
 			if got := summary.RuleCounts["REQUIRED"]; got != 1 {
 				t.Errorf("REQUIRED failures = %d, want 1 (summary %+v)", got, summary)
 			}
-			if !strings.Contains(r.stdout, "Statistics:") {
-				t.Errorf("stdout missing stats presentation %q:\n%s", "Statistics:", r.stdout)
+			stdoutSummary := decodeSummary(t, []byte(r.stdout))
+			if stdoutSummary.RunID != summary.RunID || stdoutSummary.RuleCounts["REQUIRED"] != 1 {
+				t.Errorf("stdout and exported summary differ: stdout=%+v export=%+v", stdoutSummary, summary)
 			}
 		})
 	}
@@ -666,4 +667,19 @@ rules: []
 	if plan.Format != "ndjson" {
 		t.Errorf("plan format = %q, want %q", plan.Format, "ndjson")
 	}
+}
+
+func TestStdoutOnlyPresentationFailureIsOperational(t *testing.T) {
+	dir := t.TempDir()
+	input := putFixture(t, dir, "rows.csv", okCSV)
+	pipeline := putFixture(t, dir, "pipeline.yml", rawCSVPipeline)
+	var stderr bytes.Buffer
+	code := Run(context.Background(), app.Runtime{Stdout: failingWriter{}, Stderr: &stderr}, []string{"validate", "-p", pipeline, "-i", input})
+	if code != ExitOperational {
+		t.Fatalf("exit code = %d, want %d; stderr=%s", code, ExitOperational, stderr.String())
+	}
+	if strings.Contains(stderr.String(), "after terminal commit") {
+		t.Fatalf("stdout-only failure claimed a commit: %s", stderr.String())
+	}
+	assertNoManifest(t, dir)
 }

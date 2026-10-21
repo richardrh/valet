@@ -38,11 +38,11 @@ supersedes older output/counting descriptions below where they differ.
 These are specification choices, not claims of additional user approval or observed performance:
 
 - The default managed execution budget is 512 MiB. It is configurable and is **not a hard process-RSS limit**. Deployments must leave runtime/SDK headroom.
-- AWS S3 and a pinned MinIO release are the initial verified object-store targets. Other services may work through endpoint configuration but are not advertised as verified until their integration suite passes.
+- MinIO (pinned source commit) and RustFS (pinned container digest) are required independent S3-compatible acceptance targets. AWS service behavior, IAM and KMS remain explicitly unverified and are outside the release prerequisite scope. Other services are not advertised as verified until their integration suite passes.
 - Inputs are replayable files/objects. Standard-input streaming is not supported in this release because global checks may require another pass.
 - Explicit input lists and prefix/directory discovery form one logical dataset. Input order is deterministic; bucket output preserves that order.
 - No checkpoint/resume. An interrupted job is restarted as a new run.
-- Output is published through a completion manifest in a unique run location. Incomplete artifacts may exist but are not valid completed results.
+- With an output URI, artifacts are published through a completion manifest in a unique run location. Without one, validation returns only an aggregate stdout summary; no artifact files or manifest exist. Incomplete artifacts are not valid completed artifact results.
 - Standard AWS SDK credential discovery is supported. Explicit role-assumption configuration beyond SDK profiles, SSE-C, and special endpoint authentication are not separate product features in this release.
 - New outputs count every warning occurrence, including warnings on rows assigned to the error bucket. This is a documented correction to current reporting.
 
@@ -158,7 +158,7 @@ Dependencies flow from CLI/application assembly toward these components. `engine
 Use small interfaces at the consuming boundary. Do not require every component to implement an interface merely to make it mockable. Tests should exercise real implementations where practical.
 
 The current compact implementation combines rule compilation and evaluation
-in `internal/checks` and the serial execution loop in `internal/app`; report
+in `internal/checks` and the bounded ordered execution pipeline in `internal/app`; report
 contracts live in `internal/data` and encoders in `internal/sink`. The table
 describes responsibility boundaries, not a requirement for empty `rules`,
 `engine` or `report` packages. `internal/data` owns batch/provenance/field-state
@@ -235,11 +235,13 @@ Relative local `reference_file`, `mapping_file` and `schema_file` paths resolve 
 ### Commands and precedence
 
 - `valet validate -p pipeline.yml [-i URI] [-o URI]`: run validation. `-i` overrides the configured dataset with one explicit source; `-o` overrides output location.
+- Without `-o`/`output.uri`, `validate` emits one aggregate JSON summary on stdout, with no sink/output client, files, per-row issue stream or manifest. Counts, coverage, trust, provenance and existing bounded schema/dataset diagnostics remain. Resolve an unspecified mode after CLI overrides: no URI means `report`, URI means `all`. Reject explicit `all`/`failures` without a URI at validation run entry, not config inspection by plan/schema.
 - `valet validate ... --memory-budget 512MiB --batch-target 8MiB --workers 1`: explicit execution overrides.
 - `valet plan -p pipeline.yml [-i URI]`: validate configuration, discover schemas and report required passes, global state and source capabilities. It may read metadata/inference samples; it does not execute the full validation or promise that future distinct-key state will fit.
 - `valet schema -p pipeline.yml [-i URI]`: inspect Parquet footer/schema metadata only. Report schema compatibility separately with `scope: schema`, `metadata_only: true`, `validation: not_evaluated` and `rows_checked: 0`; footer counts are declared, not validated. Do not initialize output clients, load rule references, decode payloads, compute full-content digests or publish ordinary row-bucket manifests. Explicitly enumerate data-dependent checks not evaluated. Exit 0 compatible, 1 schema mismatch, 2 operational failure.
 - `--help` and `--version` must not initialise storage clients, discover credentials or start worker pools.
 - Preserve `--plain`, `--verbose` and `--stats` presentation intent. `--plain` prints the Python-compatible `key=value` summary lines (`title`, `total`, `pass`, `warn`, `error`, `output_dir`) followed by `status`, `validation`, `run_id` and `manifest`. `--stats` adds per-rule failure counts (rule and ingestion codes) and the configured `stats` aggregates. `-v`/`--verbose` equals `--log-level debug`; `--log-level debug|info|warn|error` (default `info`) and `--log-format text|json` (default `text`) select structured `log/slog` output on stderr. Log records within a run carry `run_id`. `--json-output PATH` writes the new versioned summary, not the legacy all-row-index JSON tree.
+- JSON stdout is the default independently of artifact selection. `--stats` implies existing plain/statistics output unless JSON is explicit. `--json-output -` explicitly selects stdout JSON and conflicts with `--plain`; `--json-output PATH` writes an additional summary file while stdout remains JSON. Presentation failure without a committed artifact manifest returns exit `2`; exit `3` is reserved for committed-artifact presentation failure. Successful stdout-only terminal logging has `manifest_committed: false`.
 - Legacy `--stdout` unified bucket CSV is explicitly unsupported in this release: reject it with migration guidance to bucket outputs and a manifest. Do not silently change its grouped-order semantics.
 
 Precedence is explicit CLI override, then YAML, then documented defaults. Credentials use the SDK chain rather than ad hoc YAML/environment interpolation. stdout carries the requested summary; logs and diagnostics go to stderr only. Exit codes: `0` completed with no error-level row or dataset violations; `1` completed with error-level violations or a schema-gate rejection; `2` pre-commit configuration/input/I/O/resource/operational failure; `3` terminal result committed but stdout presentation failed; `128+N` cancellation by signal `N` before commit where the OS supports the conventional code (`130` SIGINT, `143` SIGTERM). Exit `3` identifies a consumable manifest and must not trigger a validation rerun. Warnings alone do not produce exit `1`. Dataset assertion failure does not retroactively reclassify every row.
@@ -525,7 +527,7 @@ No business rule is silently installed. Document an explicit recommended pipelin
 
 ### Run layout
 
-Each run uses a unique child location under the configured destination:
+With an explicit output URI, each run uses a unique child location under the configured destination:
 
 ```text
 <output>/<run-id>/
@@ -558,15 +560,15 @@ the byte target.
 
 - Bucket rows contain transformed user columns and reserved provenance fields; they do not duplicate all diagnostic messages.
 - Issue records contain run/source/row identity, rule code, severity, origin (`rule`, `ingest`, or `dataset`) and check location where available. Each record represents one violated rule for one row, or one ingestion failure per field/code. Schema/dataset issues have no fabricated row number. Do not include raw values.
-- `summary.json` has `report_version: 1`, terminal status, total/bucket counts, per-rule and ingestion issue counts, unevaluable counts, dataset assertion results, configured statistics, duration, passes, managed-memory peak and references to rule/artifact metadata.
+- The stdout summary and artifact `summary.json` use the current report contract (`report_version: 2`) with terminal status, total/bucket counts, per-rule and ingestion counts, unevaluable counts, bounded dataset/schema results, statistics, duration, passes, managed-memory peak, coverage/trust/provenance and output policy. `manifest_uri` is omitted without artifact publication.
 - `artifacts.ndjson` lists written parts, sizes and integrity metadata incrementally, including reject records when conversions fail. `manifest.json` references it with count/digest rather than holding an unbounded part list.
-- For a completed row-validation run, `pass + warn + error = total`; per-rule counts equal corresponding streamed row issue counts. Dataset issues are counted separately and may cause exit `1` even if every row passes. A schema-gate rejection reports rows scanned and schema failures separately; it must not claim those rows passed row validation.
+- For a completed row-validation run, `pass + warn + error = total`; when publishing issues, per-rule counts equal corresponding streamed row issue counts. Dataset issues are counted separately and may cause exit `1` even if every row passes. A schema-gate rejection reports rows scanned and schema failures separately; it must not claim those rows passed row validation.
 
 Version report/configuration contracts independently of executable versions. Preserve full 64-bit row identities in JSON numbers with a documented consumer precision warning; consumers unable to represent them exactly must use a lossless JSON decoder.
 
 ### Commit and failure behaviour
 
-Only `manifest.json` marks a terminal, consumable result. Publish it after every output has closed successfully, requested file summary output has been atomically published and its containing directory synced, and the summary/artifact metadata is durable. It records `completed` or `schema_rejected`; completed validation with error rows is still a valid completed result, not an operational failure.
+For artifact runs only, `manifest.json` marks the terminal, consumable artifact result. Publish it after every output has closed successfully, requested file summary output has been atomically published and its containing directory synced, and the summary/artifact metadata is durable. It records `completed` or `schema_rejected`; completed validation with error rows is still a valid completed result, not an operational failure. Stdout-only runs instead return the aggregate summary and never claim artifact commitment.
 
 Local publication syncs each temporary file, publishes without replacement, and syncs each changed containing directory; the manifest directory sync is the commit boundary. If directory sync fails after publication, remove the newly published target and sync that removal before returning failure. Windows directory flush handles require write access. S3 create-if-absent PUTs carry a random write identity and content digest and reconcile ambiguous responses with a fresh bounded context independent of request cancellation. Multipart creation disables transparent retry, pre-reserves cleanup capacity, and cleans unknown uploads for the run-owned key; ambiguous completion verifies identity, length, and a streamed content digest. This is an application commit protocol, not atomic multi-object storage. Consumers must start from the manifest and verify referenced metadata, not assume a listing implies completeness.
 
@@ -583,7 +585,7 @@ Bucket rows preserve deterministic source order. Row issues follow source order,
 - Support default bucket encryption and AWS SSE-S3/SSE-KMS output options through explicit sink settings. Never promise a service supports AWS encryption/authentication features merely because it accepts S3 requests.
 - Bound SDK concurrency, multipart part sizes and retry buffers. Use finite SDK retries within the run context only for idempotent operations. Conditional object PUT and multipart completion reconcile ambiguous success; multipart creation uses one attempt and explicit cleanup. Do not add automatic whole-job retries.
 - Protect logs from credential/header disclosure; redact query strings on diagnostic URLs. Report rule codes and provenance without dumping sensitive rows.
-- Small AWS integration tests use isolated prefixes and scoped credentials; MinIO tests run locally/CI. Compatibility claims list tested service versions/features and limitations.
+- Run the real release and race CLI suites against independent MinIO and RustFS containers, including owned versioned buckets. Selected skips or missing executions fail the compatibility gate. Optional AWS tests use isolated prefixes and scoped credentials; they are not release prerequisites or substitute evidence. Compatibility claims list tested service versions/features and limitations.
 
 ## 12. Testing and benchmark specification
 
@@ -609,7 +611,7 @@ Use the actual compiler and engine with a bounded verification sink that accumul
 |---|---|---|
 | Unit/fuzz | Small batches and small fixtures; semantic boundaries and ownership | Ordinary `go test ./...` |
 | Resource | Generated volume several times the budget; constrained queues; slow sinks; growing global state | Regular CI with bounded duration |
-| Integration | Real CLI, CSV/Parquet encoders/decoders, local storage, pinned MinIO; separate small AWS runs | Explicit integration job |
+| Integration | Real CLI, CSV/Parquet encoders/decoders, local storage, pinned MinIO and RustFS containers | Required two-backend integration matrix; optional AWS runs reported separately |
 | Scale | At least 100 GiB generated Arrow data through the real engine | Explicit scheduled/manual acceptance job |
 | Adapter soak | Generated CSV stream and rolling bounded Parquet objects through actual readers/writers | Explicit acceptance job; no giant retained fixture |
 
@@ -775,7 +777,7 @@ Do not merge fake implementations or permanently skipped acceptance tests and ca
 5. **Pass semantic, integration and scale acceptance:** generated 100 GiB stream, actual adapter soaks, no-spill global failure cases and target-OS execution. Publish measurements and known limits.
 6. **Release and document:** binaries, checksums, dependency/license information, configuration reference, output schemas, custom-build check instructions and migration notes. Leave the Python release usable during evaluation; no automatic replacement of users' Python installation.
 
-Release readiness requires the applicable gates above, not merely successful compilation or a generated-stream benchmark. Actual AWS verification and native Linux arm64/Windows execution must be recorded separately from local MinIO tests and cross-compilation.
+Release readiness requires the applicable gates above, not merely successful compilation or a generated-stream benchmark. Required object-store proof is the independent MinIO/RustFS container matrix; AWS-specific verification is outside scope and remains unverified. Native Linux arm64/Windows execution must be recorded separately from local compatibility tests and cross-compilation.
 
 ## 14. References
 

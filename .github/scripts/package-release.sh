@@ -12,7 +12,7 @@ output="$(realpath dist)"
 staging="$(mktemp -d)"
 trap 'rm -rf "$staging"' EXIT
 
-metadata=(README.md CHANGELOG.md LICENSE)
+metadata=(README.md CHANGELOG.md LICENSE SECURITY.md)
 
 archives=()
 for target in linux-amd64 linux-arm64 windows-amd64 darwin-amd64 darwin-arm64; do

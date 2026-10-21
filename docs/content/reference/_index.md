@@ -2,6 +2,8 @@
 title: Reference
 weight: 60
 type: docs
+sidebar:
+  exclude: true
 ---
 
 Use these references while authoring and operating pipelines.

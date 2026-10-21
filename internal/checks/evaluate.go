@@ -306,6 +306,9 @@ func (p *Program) Evaluate(b *data.Batch) (*data.Result, error) {
 			result.Release()
 		}
 	}()
+	// Stdout-only validation needs aggregate counts, not per-row diagnostics.
+	// Artifact report mode still retains issues for the NDJSON writer.
+	retainIssues := p.summary.OutputMode != "report" || p.cfg.Output.URI != ""
 	ingestCursor := 0
 	for row := range n {
 		if row%rowsPerCancellationCheck == 0 {
@@ -327,8 +330,10 @@ func (p *Program) Evaluate(b *data.Batch) (*data.Result, error) {
 			if issue.GlobalRow != location.GlobalRow || issue.SourceOrdinal != location.SourceOrdinal {
 				break
 			}
-			if err := p.results.appendIssue(scratch, issue); err != nil {
-				return nil, err
+			if retainIssues {
+				if err := p.results.appendIssue(scratch, issue); err != nil {
+					return nil, err
+				}
 			}
 			if err := incrementCount(p.summary.IngestCounts, issue.Code); err != nil {
 				return nil, err
@@ -344,8 +349,10 @@ func (p *Program) Evaluate(b *data.Batch) (*data.Result, error) {
 			if v != verdictFail {
 				continue
 			}
-			if err := p.results.appendIssue(scratch, data.Issue{Location: location, Code: r.code, Severity: r.level, Origin: data.OriginRule, Scope: data.ScopeRow, Column: column, Message: r.message}); err != nil {
-				return nil, err
+			if retainIssues {
+				if err := p.results.appendIssue(scratch, data.Issue{Location: location, Code: r.code, Severity: r.level, Origin: data.OriginRule, Scope: data.ScopeRow, Column: column, Message: r.message}); err != nil {
+					return nil, err
+				}
 			}
 			if r.level == levelError {
 				bucket = data.BucketError

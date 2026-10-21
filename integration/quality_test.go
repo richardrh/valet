@@ -461,13 +461,4 @@ func TestE2E19ConfigurationFailures(t *testing.T) {
 		}
 		expectRejected(t, path)
 	})
-	t.Run("stdout migration", func(t *testing.T) {
-		_, stderr, code := invoke(t, "validate", "--stdout")
-		if code != exitOperational {
-			t.Errorf("exit = %d, want %d", code, exitOperational)
-		}
-		if !strings.Contains(strings.ToLower(string(stderr)), "manifest") {
-			t.Errorf("stderr = %s, want migration guidance mentioning manifest", stderr)
-		}
-	})
 }

@@ -41,23 +41,23 @@ const usage = `Usage:
   valet --version
 
 Commands:
-  validate  Validate the dataset and publish bucket outputs and a manifest.
+  validate  Validate the dataset; print summary JSON without artifacts by default.
   plan      Describe schemas, passes and state without executing validation.
   schema    Check Parquet footer/schema compatibility without reading row data.
 
 Options:
   -p, --pipeline PATH     Local pipeline document: .yaml, .yml or .json (required)
   -i, --input URI         Replace the configured source with one file/object
-  -o, --output URI        Override the output directory/prefix
+  -o, --output URI        Publish artifacts in this directory/prefix
   --memory-budget SIZE    Managed execution budget, e.g. 512MiB (not RSS)
   --batch-target SIZE     Target Arrow batch size, e.g. 8MiB
   --workers N             Validation workers (default 1)
-  --output-mode MODE      all, failures (warnings/errors), or report (no row files)
+  --output-mode MODE      all, failures, or report (default report without output)
   --parquet-stats POLICY  off (default) or explicitly trusted producer statistics
   --format FORMAT         schema only: json (default) or readable text
   --plain                 Print the summary as key=value lines
   --stats                 Include per-rule failure counts and configured statistics
-  --json-output PATH      Write versioned summary JSON; '-' selects stdout
+  --json-output PATH      Also export summary JSON; '-' explicitly selects JSON stdout
   -v, --verbose           Debug logging (same as --log-level debug)
   --log-level LEVEL       debug, info, warn or error (default info)
   --log-format FORMAT     text or json (default text)
@@ -67,11 +67,11 @@ Options:
 CLI values override YAML, which overrides defaults. When input.type is omitted
 it is inferred from the first source URI suffix (.parquet, .ndjson/.jsonl,
 .json, otherwise csv; .gz is ignored). Plan prints JSON; schema defaults to JSON
-and accepts --format text. All data output modes publish a completion manifest.
-Schema reports metadata compatibility only, with rows_checked=0; it does not
-validate rows, castability or payload integrity. Logs and diagnostics go to
-stderr only. Legacy --stdout is unsupported; use bucket outputs and their
-completion manifest instead.
+and accepts --format text. Validate defaults to one summary JSON on stdout.
+Without an output URI it creates no artifacts; an output URI enables artifact
+publication and a completion manifest (default mode all). --plain selects
+key=value output; --stats selects statistics presentation unless JSON is explicit.
+Schema checks metadata only, not row values. Logs and diagnostics use stderr.
 
 Exit codes: 0 passed (warnings allowed), 1 validation/schema failure,
             2 pre-commit configuration/input/I/O/resource failure,
@@ -237,13 +237,16 @@ func Run(ctx context.Context, rt app.Runtime, args []string) (code int) {
 	}
 	state.summary = summary
 	presentation := diagnostics.Start(ctx, diagnostics.Present)
-	if opts.jsonOutput == "-" {
+	if opts.jsonOutput != "" || (!opts.plain && !opts.stats) {
 		err = encodeJSON(rt.Stdout, summary)
 	} else {
 		err = out.summary(summary, cfg.Output.URI, opts.plain, opts.stats)
 	}
 	presentation.End(err)
 	if err != nil {
+		if summary.ManifestURI == "" {
+			return out.fail(ctx, fmt.Errorf("write summary: %w", err))
+		}
 		return out.committedFailure(err, summary.ManifestURI)
 	}
 	if summary.Validation == data.ValidationFail || summary.Status == data.StatusSchemaRejected {
@@ -325,7 +328,7 @@ func parse(args []string) (*options, error) {
 	flags.Visit(func(f *flag.Flag) { opts.set[f.Name] = true })
 	switch {
 	case opts.has("stdout"):
-		return nil, errors.New("legacy --stdout is unsupported: select --output for ordered bucket files and consume their completion manifest; use --json-output - for summary JSON")
+		return nil, errors.New("legacy --stdout is unsupported: validate writes summary JSON to stdout by default; select --output to publish artifacts")
 	case strings.TrimSpace(opts.pipeline) == "":
 		return nil, errors.New("--pipeline (-p) is required")
 	case opts.command == "schema" && opts.has("output-mode", "parquet-stats"):
@@ -344,6 +347,8 @@ func parse(args []string) (*options, error) {
 		return nil, errors.New("schema accepts input, memory-budget and logging options, not output or row-execution options")
 	case opts.has("json-output") && opts.jsonOutput == "":
 		return nil, errors.New("--json-output requires a nonempty path or '-'")
+	case opts.plain && opts.jsonOutput == "-":
+		return nil, errors.New("--plain conflicts with --json-output -")
 	case opts.has("i", "input") && strings.TrimSpace(opts.input) == "":
 		return nil, errors.New("--input requires a nonempty URI")
 	case opts.has("i", "input") && opts.input == "-":

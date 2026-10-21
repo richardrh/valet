@@ -150,6 +150,12 @@ func validatePass(ctx context.Context, cancelRun context.CancelFunc, cfg *config
 				state.fail(errors.New("input batch has neither values nor evidence"))
 				return
 			}
+			if writer == nil && pending.result != nil {
+				if reportErr := accountReportBatch(program.Summary(), batch, pending.result); reportErr != nil {
+					state.fail(reportErr)
+					return
+				}
+			}
 			queued := time.Now()
 			select {
 			case writes <- pending:
@@ -272,6 +278,11 @@ func validateSerialBatch(ctx context.Context, cfg *config.Config, batch *data.Ba
 			return 0, fmt.Errorf("evaluate checks: %w", err)
 		}
 		diagnostics.AddRows(ctx, diagnostics.Evaluate, uint64(batch.Record.NumRows()))
+		if writer == nil {
+			if err := accountReportBatch(program.Summary(), batch, result); err != nil {
+				return 0, err
+			}
+		}
 	}
 	if err := writeEvaluatedBatch(ctx, cfg, writer, batch, result); err != nil {
 		return 0, fmt.Errorf("write output batch: %w", err)

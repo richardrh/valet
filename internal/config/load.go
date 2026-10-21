@@ -291,9 +291,6 @@ func (c *Config) applyDefaults() {
 	if c.Input.Parquet.Statistics == "" {
 		c.Input.Parquet.Statistics = "off"
 	}
-	if c.Output.Mode == "" {
-		c.Output.Mode = "all"
-	}
 	if c.Output.Parquet.Statistics == "" {
 		c.Output.Parquet.Statistics = "none"
 	}

@@ -12,6 +12,9 @@ validation, exact-number preservation, defaults and semantic validation.
 
 ## Top-level structure
 
+This pipeline returns an aggregate JSON report on stdout. Artifact publication
+is optional; add an output destination only when you need persisted results.
+
 ```yaml
 name: Orders validation
 version: "1.0"
@@ -27,10 +30,6 @@ input:
       order_id: {type: string}
       quantity: {type: int64}
 
-output:
-  uri: output/
-  format: parquet
-
 execution:
   memory_budget: 512MiB
   batch_target: 8MiB
@@ -44,6 +43,12 @@ dataset_rules: []
 CLI `-i` and `-o` replace the configured input and output. Explicit execution
 flags override the document. Relative references, mappings and schema files
 resolve from the pipeline document's directory.
+
+Omit `output.uri` (and `-o`) for one aggregate JSON summary on stdout and no
+artifact files or manifest. The output mode defaults after CLI overrides:
+`report` without a URI, `all` with one. Explicit `all` or `failures` requires a
+destination when running `validate`; explicit `report` with a destination
+publishes issues/reports and a manifest, but no row files or raw rejects.
 
 ## Sources
 
@@ -123,16 +128,22 @@ input:
   parquet:
     statistics: off       # off (default) or explicitly trusted
 output:
+  uri: ./results          # explicitly request artifact publication
   mode: all               # all, failures, report
   format: parquet
   parquet:
     statistics: none      # none (default), bounded
 ```
 
+For stdout-only validation, omit this `output` block. Setting `mode: all` or
+`mode: failures` without a destination is an error, not a request to discard
+those artifacts.
+
 Use `--output-mode` and `--parquet-stats` to override these policies. Writer
 statistics do not grant reader trust. Report-only still validates the data by
-default and publishes a terminal result, but does not encode row buckets or raw
-rejects. See [output modes and metadata trust](../validation-modes/) before
+default. Without a destination it returns only stdout JSON; with a destination
+it publishes reports and a manifest, but no row buckets or raw rejects.
+See [output modes and metadata trust](../validation-modes/) before
 enabling producer-statistics shortcuts.
 
 ## Execution limits

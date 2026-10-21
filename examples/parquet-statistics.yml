@@ -14,6 +14,7 @@ input:
 
 output:
   mode: report
+  # No URI means aggregate stdout only; -o reports/ also persists evidence/issues.
 
 rules:
   - code: AMOUNT_POSITIVE
