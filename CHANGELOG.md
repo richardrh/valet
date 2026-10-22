@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Clarified what Valet is and why to use it across the README, docs homepage
+  and getting-started guide, leading with file-based ingestion gates and
+  stdout reports rather than schema inspection or optional artifact output.
+- Shortened the README to a product overview and runnable examples; replaced
+  Python report-extraction snippets in onboarding docs with simple `jq` queries.
+- Reduced the root README to purpose, capabilities, motivation, installation and
+  usage; added Go installation instructions and a release-gating `go-install`
+  job that exercises both checkout and published-tag installations.
+- Added a concise README comparison with Great Expectations (GX Core) and
+  Soda Core, linking their official documentation and distinguishing workflows
+  without implying that either requires a hosted service or cannot read files.
+- Added concise workflow/runtime and measured deployment-footprint tables for
+  Valet, GX Core/pandas and Soda Core/DuckDB, including version/extras caveats
+  and clarification that Valet links the Go AWS SDK rather than Python.
+
 ## [0.1.0-rc.1] - 2026-10-21
 
 ### Added

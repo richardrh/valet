@@ -7,9 +7,34 @@ sidebar:
 next: getting-started/installation
 ---
 
-Valet is a self-contained Go CLI for validating local or S3-hosted CSV,
-Parquet, NDJSON and JSON data. Pipeline documents can be strict YAML or strict
-JSON; both formats normalize to the same configuration and behavior.
+## What is Valet?
+
+Valet is a **command-line data quality gate for file-based pipelines**. Use it
+before ingesting a file into a lakehouse or warehouse, or before passing data
+to another job.
+
+You describe checks in YAML or JSON and run them against local or
+S3-compatible CSV, Parquet, NDJSON or JSON files. By default, Valet returns one
+aggregate JSON report on stdout and an exit code, without rewriting the data
+or creating output files.
+
+## Why Valet?
+
+Reading a file successfully does not establish that its contents meet your
+requirements. Valet checks expected schemas, missing values, ranges, duplicate
+keys, references and relationships between columns before those problems
+propagate downstream. Keep the checks in version control and run the same
+rules wherever the file enters your pipeline.
+
+Your caller owns the next step: continue after exit `0`, block ingestion after
+failed checks (`1`), and handle execution failures separately (`2`). Warnings
+do not block by default; set mandatory rules to `level: error`.
+
+Valet is a self-contained CLI, not another service to deploy. It does not
+schedule jobs or upload files into a lakehouse. Keep your existing uploader
+and validate the same immutable input before invoking it.
+
+## Start here
 
 {{< cards >}}
   {{< card link="installation" title="Installation" subtitle="Download a release or build the CLI." >}}

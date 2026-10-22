@@ -95,14 +95,7 @@ for mandatory checks; warning-level failures still permit exit `0`. Upload
 the same immutable input that Valet checked.
 
 ```bash
-python3 - <<'PY'
-import json
-with open("validation-summary.json") as stream:
-    summary = json.load(stream)
-print(summary["validation"])
-print(summary["error"])
-print(summary["rule_counts"])
-PY
+jq '{validation, error, rule_counts}' validation-summary.json
 ```
 
 For artifact runs, read entries with `kind: issues` or `kind: rejects` for
@@ -134,6 +127,30 @@ identity, OIDC role or secret provider. Do not put static credentials in the
 pipeline document. Source and output can use separate endpoint, region and
 profile settings when required.
 
+## Run checks locally
+
+From the repository root:
+
+```bash
+go test ./...
+go test -tags=integration ./integration -timeout 20m
+```
+
+Object-store cases skip when their endpoint and credentials are absent. For
+actual S3-compatible acceptance, run the disposable container harness:
+
+```bash
+bash .github/scripts/test-s3-compatible.sh minio
+bash .github/scripts/test-s3-compatible.sh rustfs
+```
+
+The harness needs Go, a C compiler for the race build, Docker, curl and jq.
+For rootless Podman, prefix each command with `CONTAINER_RUNTIME=podman`.
+It uses loopback bindings and local-only credentials, removes its containers
+and temporary data, and fails on any selected skip. Set `VALET_S3_LOG_DIR` to
+retain JSON test events and server logs.
+
+
 ## Repository CI and release publishing
 
 The repository's automation lives in `.github/workflows/`. It uses the Go
@@ -148,6 +165,11 @@ fit a runner's preinstalled toolchain.
 - Quality gates verify modules, formatting, vet, race tests, vulnerability
   scanning with pinned `govulncheck` v1.9.0, and workflow validation with pinned
   `actionlint` v1.7.12.
+- A `go-install` job installs the checkout into an isolated `GOBIN` and runs
+  executable acceptance tests against that installed CLI. Tagged releases also
+  run `go install github.com/richardrh/valet/cmd/valet@<tag>` through the module
+  distribution path and exercise that executable. Release publication waits
+  for these installation checks as well as the existing build/storage gates.
 - Linux amd64, Linux arm64 and Windows amd64 run native unit tests and CLI
   acceptance against the version-stamped binaries that become release assets.
 - Darwin amd64 and arm64 are cross-built and their tests compiled on Linux.
