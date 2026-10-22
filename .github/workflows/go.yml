@@ -57,6 +57,38 @@ jobs:
       - name: Validate GitHub workflows
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -shellcheck= .github/workflows/*.yml
 
+  go-install:
+    needs: quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Install checkout
+        env:
+          GOBIN: ${{ runner.temp }}/valet-checkout
+        run: go install ./cmd/valet
+      - name: Exercise installed checkout
+        env:
+          VALET_BINARY: ${{ runner.temp }}/valet-checkout/valet
+        run: go test -count=1 -tags integration ./integration -run '^TestStdout' -timeout 5m
+      - name: Install published module tag
+        if: github.ref_type == 'tag'
+        env:
+          GOBIN: ${{ runner.temp }}/valet-module
+          INSTALL_VERSION: ${{ github.ref_name }}
+        run: go install "github.com/richardrh/valet/cmd/valet@$INSTALL_VERSION"
+      - name: Exercise installed module tag
+        if: github.ref_type == 'tag'
+        env:
+          VALET_BINARY: ${{ runner.temp }}/valet-module/valet
+        run: go test -count=1 -tags integration ./integration -run '^TestStdout' -timeout 5m
+
   verify:
     needs: quality
     timeout-minutes: 30

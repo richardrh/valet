@@ -40,7 +40,7 @@ menu:
         icon: github
 
 params:
-  description: Bounded streaming validation for CSV, JSON, NDJSON and Parquet.
+  description: A command-line data quality gate for local and S3-compatible files before ingestion.
   navbar:
     displayTitle: true
     displayLogo: true

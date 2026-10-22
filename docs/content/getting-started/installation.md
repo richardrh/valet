@@ -84,6 +84,20 @@ Checksums detect corrupted or mismatched downloads; they are not a detached
 signature or an independent authenticity guarantee. Download both files from
 the intended repository's release over HTTPS.
 
+## Install with Go
+
+With Go 1.27.3 or later, install without cloning the repository:
+
+```bash
+go install github.com/richardrh/valet/cmd/valet@latest
+```
+
+To pin the initial release candidate, use
+`go install github.com/richardrh/valet/cmd/valet@v0.1.0-rc.1`.
+Go places the executable in `GOBIN`, or `$(go env GOPATH)/bin` when `GOBIN` is
+unset; add that directory to your `PATH`. This is a source build and currently
+reports `dev` with `--version`; downloaded release binaries are version-stamped.
+
 ## Build from source
 
 - Go 1.27.3 or later is required, matching the repository's `go.mod`.
