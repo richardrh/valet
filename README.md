@@ -80,11 +80,24 @@ Core Ultra X7 358H; both tools reported the same failure counts.
 | Installed | **42.6 MiB** | 324.7 MiB incl. Python |
 | Python packages | **0** | 36 |
 
-## Quick start
+## Install
+
+With Go 1.27.3 or newer:
 
 ```sh
-go install github.com/richardrh/valet/cmd/valet@latest   # or download a release
+go install github.com/richardrh/valet/cmd/valet@latest
+valet --help
 ```
+
+| | |
+|---|---|
+| Pin a version | `go install github.com/richardrh/valet/cmd/valet@v0.1.0-rc.2` |
+| Where it goes | `$(go env GOBIN)`, or `$(go env GOPATH)/bin` if unset — add it to `PATH` |
+| Without Go | Download a binary from [Releases](https://github.com/richardrh/valet/releases) (Linux, macOS, Windows) |
+
+Builds from `go install` report `dev` for `--version`; release binaries carry their version.
+
+## Quick start
 
 ```yaml
 # pipeline.yml
