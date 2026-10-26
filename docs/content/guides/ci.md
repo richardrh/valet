@@ -124,7 +124,9 @@ Workflows in `.github/workflows/` use Go from `go.mod` (1.27.3); don't lower it 
 
 | Job / area | What runs |
 |---|---|
-| `go.yml` | Branch pushes, PRs, manual dispatch, release calls; not tag pushes |
+| `go.yml` | PRs, pushes to `main`, manual dispatch, release calls; not other branch pushes or tag pushes |
+| `changes` | Docs-only PRs (`docs/content`, layouts, Hugo config, engineering docs, `*.md`, `docs.yml`) skip the jobs below |
+| Caching | Each job restores its own Go build/test cache, saved on every `main` commit; the MinIO build is cached by its pinned commit and Go version. Integration runs against a built binary always use `-count=1` |
 | Quality | Modules, format, vet, race tests, `govulncheck` v1.9.0, `actionlint` v1.7.12 |
 | `go-install` | CLI acceptance from isolated `GOBIN`; tags also test `go install github.com/richardrh/valet/cmd/valet@<tag>` |
 | Native | Linux amd64/arm64, Windows amd64 on the release binaries |
@@ -133,6 +135,7 @@ Workflows in `.github/workflows/` use Go from `go.mod` (1.27.3); don't lower it 
 | AWS | Optional opt-in; not a release gate |
 | Scale | Manual input `run_scale`: 10 GiB and 100 GiB Arrow streams |
 | `docs.yml` | Hugo Extended 0.156.0 (checksum-verified) for docs PRs, `main`, manual |
+| `CI result` | The single required check: passes when every job passed, or was skipped for a docs-only PR |
 
 Release publication waits for `go-install` and build/storage gates. `docs.yml` PR builds have `contents: read` only, use the repository's default Pages URL as base URL and never touch Pages (they work before Pages exists; separate concurrency groups can't cancel deploys). Publishing runs only on `main` push/manual and use the Pages base URL (custom domain included).
 
@@ -144,8 +147,8 @@ Repository settings; the workflows don't change them for you.
 |---|---|---|
 | 1 | Settings → Actions → General | Enable Actions; read-only default token; no PAT/secret needed |
 | 1a | Org policy | Allow `contents: write`, `pages: write`, `id-token: write`; fork PRs may need approval |
-| 2 | Ruleset on `main` | Require review plus reported Go CI quality, native, Darwin, S3 check names |
-| 2a | — | Don't require scale or the path-filtered docs check (unrelated PRs hang) |
+| 2 | Ruleset on `main` | Require review and the **CI result** check |
+| 2a | — | Don't require individual jobs, scale or the path-filtered docs check (skipped jobs would leave PRs pending) |
 | 3 | Settings → Pages | Source **GitHub Actions**; don't commit `docs/public/`. Not enabled automatically: without it the first publishing run fails (PR builds don't) |
 | 4 | Environments → **github-pages** | **Selected branches and tags**: `main` only; optional reviewers |
 | 5 | Actions → **Documentation** | Run on `main`, check the URL; other branches only build |
