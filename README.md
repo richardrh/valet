@@ -1,138 +1,116 @@
 # valet
 
-Valet is a validation gate for data files before they reach your warehouse or
-lakehouse. It checks CSV, Parquet, JSON and NDJSON files on local disk or
-S3-compatible storage against a YAML or JSON pipeline, and its exit code and
-JSON report decide whether a file moves on.
+A validation gate for data files before they reach your warehouse. Valet checks
+CSV, Parquet, JSON and NDJSON against a YAML or JSON pipeline; its exit code
+decides whether the file moves on.
 
-Valet is designed for short-lived batch jobs with an explicit managed-memory
-budget. That budget is not a hard process-RSS limit.
+```mermaid
+flowchart LR
+  F[File drop<br/>local or S3] --> V[valet validate]
+  V -->|exit 0| L[Load to staging]
+  V -->|exit 1| R[Report + rejects<br/>back to producer]
+  V -->|exit 2| S[Stop: bad config<br/>or malformed file]
+```
 
-The concept of Valet is that on a server memory usage is more important than runtime.
-Since it is designed for batch data validation memory constraints often play a bigger role.
+## At a glance
 
-Valet outputs structured logs, structured json reports and writes data to s3 compatible storage.
+| | |
+|---|---|
+| Inputs | CSV, Parquet, JSON, NDJSON — local files or S3-compatible storage |
+| Checks | Schema, nulls, ranges, allowed values, patterns, uniqueness, references, column comparisons, dataset metrics |
+| Outputs | JSON report and exit code; optional pass/warn/error rows, issues, rejects and a manifest |
+| Memory | Fixed managed budget (default 512 MiB), independent of file size |
+| Exactness | Integers and decimals compared exactly, never through floats |
+| Runtime | One executable — no Python, no service |
 
-Valet suits any workload that can batch ingest and run cli commands, e.g. Apache Airflow or similar.
-
-You can pipe the output of Valet reports into any ingestion tool, but piping it into jq is a good
-use case to quickly query multiple valet reports.
+| Exit | Meaning |
+|---|---|
+| `0` | Passed (warnings allowed) |
+| `1` | Error-level checks failed |
+| `2` | Bad configuration, malformed input or I/O failure — with a message naming the file, line and fix |
 
 ## Performance
-Valet trades speed for bounded memory: it reads and checks every row itself, so
-its memory is capped by the managed budget while pandas holds the whole file.
 
-| 10M rows, 4 checks             | Valet, 1 worker | Valet, 4 workers | GX Core + pandas |
-|--------------------------------|----------------:|-----------------:|-----------------:|
-| CSV (251 MiB): wall time       |           5.4 s |            3.6 s |        **2.7 s** |
-| CSV: peak memory               |      **53 MiB** |           74 MiB |        1,467 MiB |
-| Parquet (93 MiB): wall time    |       **3.0 s** |        **2.5 s** |           17.2 s |
-| Parquet: peak memory           |     **112 MiB** |          280 MiB |        2,654 MiB |
+10M rows, 4 checks, against GX Core + pandas.
 
-Both tools reported the same failure counts. Clean, generated data on an Intel
-Core Ultra X7 358H (16 threads), warm page cache; medians of three fresh
-processes. Versions: GX `1.24.1`/pandas `3.1.0`, Python `3.12`. Reproduce with
-[`benchmarks/competitors`](benchmarks/competitors/run.py); method and
-dirty-input behaviour are in the
-[performance guide](https://richardrh.github.io/valet/guides/performance/#comparison-with-gx-core).
+| | Valet, 1 worker | Valet, 4 workers | GX Core + pandas |
+|---|---:|---:|---:|
+| CSV (251 MiB) time | 5.4 s | 3.6 s | **2.7 s** |
+| CSV peak memory | **53 MiB** | 74 MiB | 1,467 MiB |
+| Parquet (93 MiB) time | 3.0 s | **2.5 s** | 17.2 s |
+| Parquet peak memory | **112 MiB** | 280 MiB | 2,654 MiB |
 
-## Where does it fit?
-
-Valet checks a file before anything loads it, while the original records still
-exist:
-
-- **Loading into staging.** Validate each file drop and load it only on exit
-  `0`. With an output destination (`-o`), rejected rows keep their original
-  records, so the producer can see exactly what to fix.
-- **Accepting large uploads.** A service that accepts CSV, Parquet or JSON
-  uploads can run Valet on the stored upload (local or S3) and accept or refuse
-  it from the exit code and report. Memory is set by the managed budget, not by
-  the size of the upload.
-- **Pipeline and CI gates.** Any scheduler that runs commands, such as Airflow
-  or a CI job, can block the next step when error-level checks fail.
-
-Once data is in the warehouse, warehouse-side tools such as Soda or GX can
-monitor it. Valet complements them; it does not replace them.
-
-## What can it do?
-
-- Read CSV, Parquet, JSON and NDJSON from local files or S3-compatible storage.
-- Check schemas, missing values, ranges, duplicate keys, references and column relationships.
-- Return a JSON report, or optionally write CSV/Parquet row outputs and detailed issues.
-- Treat values that fail conversion (for example `abc` in a decimal column) as
-  row results: the row fails, the cell is counted, and with an output
-  destination the original record is written to rejects.
-- Compare integers and decimals exactly, without rounding through floats.
-
-Structurally malformed input (a CSV row with the wrong number of fields, broken
-quoting or invalid UTF-8) stops the run with exit `2` and an error naming the
-file, the line and how to fix it. With `input.on_malformed: reject`, CSV rows
-with the wrong number of fields become rejects instead and the rest of the
-file is still checked.
-
-## Why use it?
-
-Catch bad data before loading it downstream. Keep your checks in YAML or JSON
-and use Valet's exit code to decide whether your pipeline continues—without
-writing a validation script for each input or deploying another service.
-
-
-## How does it compare?
-Valet runs with no Python dependency.
-
-| Aspect          | Valet                                    | [GX Core](https://docs.greatexpectations.io/docs/core/introduction/try_gx/) | [Soda Core](https://github.com/sodadata/soda-core) |
-|-----------------|------------------------------------------|-----------------------------------------------------------------------------|----------------------------------------------------|
-| Best fit        | Files before they are loaded             | Python, DataFrame, SQL and Spark workflows                                  | Checks on tables in a connected data source        |
-| Who reads the data | Valet itself                          | pandas, Spark or the database                                               | The connected data source's SQL engine             |
-| Unparseable values | Row fails, cell counted, original record kept as a reject | pandas reads the column as text; range expectations return an error instead of a count | Must be handled while loading; Soda's docs recommend staging values as text and adding format checks |
-| Malformed rows  | Run stops with exit `2`                  | `pandas.read_csv` raises                                                    | Must be handled by the loader before Soda runs     |
-| Checks          | YAML or JSON                             | Python Expectations and suites                                              | YAML data contracts                                |
-| Deployment      | One static executable                    | Python environment                                                          | Python environment plus connector                  |
-| Python required | **No**                                   | Yes                                                                         | Yes                                                |
-| Results         | JSON and exit code; optional rows/issues | Structured validation results                                               | CLI/API verification results                       |
-
-GX also reads files directly
-([GX](https://docs.greatexpectations.io/docs/core/connect_to_data/filesystem_data/)).
-Choose Valet for a standalone file-validation gate, not a hosted platform.
-
-### Measured deployment footprint
-Valet is one self-contained executable. It does not need Python or any other
-runtime; GX Core needs a Python environment.
-
-| Linux amd64                   |                         Valet |                         GX Core + pandas |
-|-------------------------------|------------------------------:|-----------------------------------------:|
-| Download                      | **12.8 MiB** (one `.tar.gz`)  |    76.4 MiB of packages, plus Python     |
-| Installed on disk             | **42.6 MiB** (one executable) | 248.1 MiB of packages + 76.6 MiB Python = 324.7 MiB |
-| Python required               |                        **No** |             Yes (36 Python distributions) |
-
-Measured versions: GX `1.24.0`/pandas `3.0.6` on Python `3.12.15`; Valet built
-from this repository with the release flags (`-trimpath -ldflags="-s -w"`).
-
-
-## Install
-
-[Download a binary](https://github.com/richardrh/valet/releases), or use Go 1.27.3+:
-
-```sh
-go install github.com/richardrh/valet/cmd/valet@latest
+```mermaid
+xychart-beta
+  title "Peak memory, MiB (lower is better)"
+  x-axis ["Valet CSV", "GX CSV", "Valet Parquet", "GX Parquet"]
+  y-axis "MiB" 0 --> 2800
+  bar [74, 1467, 280, 2654]
 ```
 
-## Run
-jq is not required but the below example shows how a user can filter or format the output
-by piping into other cli tools.
-
-```sh
-valet validate -p pipeline.yml -i input.parquet > report.json
-jq '{validation, total, pass, warn, error}' report.json
+```mermaid
+xychart-beta
+  title "Wall time, seconds (lower is better)"
+  x-axis ["Valet CSV", "GX CSV", "Valet Parquet", "GX Parquet"]
+  y-axis "s" 0 --> 18
+  bar [3.6, 2.7, 2.5, 17.2]
 ```
 
-Exit `0`: passed (warnings allowed). Exit `1`: failed checks. Exit `2`: execution
-failed. Use Valet's exit code—not `jq`'s—to gate the next step.
+Charts use Valet with 4 workers. Medians of three fresh processes on an Intel
+Core Ultra X7 358H; both tools reported the same failure counts.
+[Method](https://richardrh.github.io/valet/guides/performance/#comparison-with-gx-core) ·
+[reproduce](benchmarks/competitors/run.py).
 
-Editors can autocomplete and check pipelines against the published
-[JSON Schema](https://richardrh.github.io/valet/schema/v1/pipeline.schema.json);
-AI agents can load all docs from
-[`llms-full.txt`](https://richardrh.github.io/valet/llms-full.txt). See
-[editor support and AI agents](https://richardrh.github.io/valet/guides/configuration/#editor-support-and-ai-agents).
+## Compared
 
-[Docs and examples](https://richardrh.github.io/valet/) · [MIT License](LICENSE)
+| | Valet | [GX Core](https://docs.greatexpectations.io/docs/core/introduction/try_gx/) | [Soda Core](https://github.com/sodadata/soda-core) |
+|---|---|---|---|
+| Best fit | Files before loading | Python, DataFrame and Spark workflows | Tables already in a data source |
+| Reads the data | Valet | pandas, Spark or a database | The data source's SQL engine |
+| Unparseable value | Row fails, cell counted, record kept as a reject | Range check errors instead of counting | Handled by the loader |
+| Malformed row | Exit `2` with file and line, or reject with `on_malformed: reject` | `read_csv` raises | Handled by the loader |
+| Checks written in | YAML or JSON | Python | YAML |
+| Python required | **No** | Yes | Yes |
+
+| Linux amd64 | Valet | GX Core + pandas |
+|---|---:|---:|
+| Download | **12.8 MiB** | 76.4 MiB + Python |
+| Installed | **42.6 MiB** | 324.7 MiB incl. Python |
+| Python packages | **0** | 36 |
+
+## Quick start
+
+```sh
+go install github.com/richardrh/valet/cmd/valet@latest   # or download a release
+```
+
+```yaml
+# pipeline.yml
+input:
+  type: csv
+  schema:
+    columns:
+      id:     {type: int64, nullable: false}
+      amount: {type: decimal, precision: 18, scale: 2}
+      status: {type: str}
+rules:
+  - code: AMOUNT_RANGE
+    level: error
+    column: amount
+    checks: [{type: valid_range, min: 0, max: 10000}]
+  - code: STATUS_KNOWN
+    level: warn
+    column: status
+    checks: [{type: valid_values, values: [OPEN, PAID, CANCELLED]}]
+```
+
+```sh
+valet validate -p pipeline.yml -i orders.csv          # JSON report on stdout
+valet plan -p pipeline.yml -i orders.csv --format pipeline   # generate input.schema
+```
+
+[Docs](https://richardrh.github.io/valet/) ·
+[Releases](https://github.com/richardrh/valet/releases) ·
+[JSON Schema](https://richardrh.github.io/valet/schema/v1/pipeline.schema.json) ·
+[llms-full.txt](https://richardrh.github.io/valet/llms-full.txt) ·
+[MIT License](LICENSE)
