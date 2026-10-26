@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.0-rc.2] - 2026-10-26
+
 ### Added
 
 - A JSON Schema for pipeline documents, generated from the configuration types
