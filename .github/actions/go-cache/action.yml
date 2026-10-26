@@ -1,0 +1,42 @@
+name: Go build cache
+description: >-
+  Restore, or save, the Go build and module caches for one job. Each job and
+  matrix entry has its own cache because they compile different variants
+  (race, cross-compiled, trimmed release builds). Main saves a fresh cache per
+  commit; pull requests restore the newest one, so only changed packages
+  rebuild and unchanged tests are served from Go's test cache.
+inputs:
+  name:
+    description: Cache name, unique per job and matrix entry.
+    required: true
+  save:
+    description: Save the caches instead of restoring them.
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    - id: paths
+      shell: bash
+      run: |
+        {
+          echo "gocache=$(go env GOCACHE)"
+          echo "gomodcache=$(go env GOMODCACHE)"
+          echo "prefix=go-${RUNNER_OS}-${RUNNER_ARCH}-${{ inputs.name }}-${{ hashFiles('go.sum') }}-"
+        } >> "$GITHUB_OUTPUT"
+    - if: inputs.save != 'true'
+      uses: actions/cache/restore@v4
+      with:
+        path: |
+          ${{ steps.paths.outputs.gocache }}
+          ${{ steps.paths.outputs.gomodcache }}
+        key: ${{ steps.paths.outputs.prefix }}${{ github.sha }}
+        restore-keys: |
+          ${{ steps.paths.outputs.prefix }}
+          go-${{ runner.os }}-${{ runner.arch }}-${{ inputs.name }}-
+    - if: inputs.save == 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          ${{ steps.paths.outputs.gocache }}
+          ${{ steps.paths.outputs.gomodcache }}
+        key: ${{ steps.paths.outputs.prefix }}${{ github.sha }}

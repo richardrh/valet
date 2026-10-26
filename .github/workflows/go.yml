@@ -1,8 +1,10 @@
 name: CI
 
 on:
+  # Pull requests run through pull_request; pushing their branch would run CI
+  # a second time. Main still runs after every merge and saves the caches.
   push:
-    branches: ['**']
+    branches: [main]
   pull_request:
   workflow_dispatch:
     inputs:
@@ -26,7 +28,38 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Pull requests that only touch documentation skip the Go and storage jobs;
+  # CI result still reports success for them. Every other event runs all jobs.
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ steps.filter.outputs.code || 'true' }}
+    steps:
+      - id: filter
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+        with:
+          predicate-quantifier: every
+          filters: |
+            code:
+              - '**'
+              - '!docs/content/**'
+              - '!docs/layouts/**'
+              - '!docs/assets/**'
+              - '!docs/hugo.yaml'
+              - '!docs/go.mod'
+              - '!docs/go.sum'
+              - '!docs/engineering/**'
+              - '!**/*.md'
+              - '!.github/workflows/docs.yml'
+
   quality:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
@@ -36,7 +69,10 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          cache-dependency-path: go.sum
+          cache: false
+      - uses: ./.github/actions/go-cache
+        with:
+          name: quality
       - name: Verify modules
         run: go mod verify
       - name: Check formatting
@@ -58,6 +94,11 @@ jobs:
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
       - name: Validate GitHub workflows
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -shellcheck= .github/workflows/*.yml
+      - uses: ./.github/actions/go-cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with:
+          name: quality
+          save: 'true'
 
   go-install:
     needs: quality
@@ -70,7 +111,10 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          cache-dependency-path: go.sum
+          cache: false
+      - uses: ./.github/actions/go-cache
+        with:
+          name: go-install
       - name: Install checkout
         env:
           GOBIN: ${{ runner.temp }}/valet-checkout
@@ -90,6 +134,11 @@ jobs:
         env:
           VALET_BINARY: ${{ runner.temp }}/valet-module/valet
         run: go test -count=1 -tags integration ./integration -run '^TestStdout' -timeout 5m
+      - uses: ./.github/actions/go-cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with:
+          name: go-install
+          save: 'true'
 
   verify:
     needs: quality
@@ -119,7 +168,10 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          cache-dependency-path: go.sum
+          cache: false
+      - uses: ./.github/actions/go-cache
+        with:
+          name: verify-${{ matrix.target }}
       - name: Unit tests
         run: go test ./...
       - name: Build self-contained CLI
@@ -127,12 +179,19 @@ jobs:
       - name: Release executable reports stamped version
         run: test "$('./dist/${{ matrix.executable }}' --version | tr -d '\r')" = "valet $VERSION"
       - name: CLI acceptance scenarios against release executable
-        run: VALET_BINARY="$PWD/dist/${{ matrix.executable }}" go test -tags integration ./integration
+        # -count=1: Go's test cache does not see the external executable, so a
+        # cached pass could hide a regression in a new build.
+        run: VALET_BINARY="$PWD/dist/${{ matrix.executable }}" go test -count=1 -tags integration ./integration
       - uses: actions/upload-artifact@v4
         with:
           name: valet-${{ matrix.target }}
           path: dist/${{ matrix.executable }}
           if-no-files-found: error
+      - uses: ./.github/actions/go-cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with:
+          name: verify-${{ matrix.target }}
+          save: 'true'
 
   darwin-cross-build:
     needs: quality
@@ -154,7 +213,10 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          cache-dependency-path: go.sum
+          cache: false
+      - uses: ./.github/actions/go-cache
+        with:
+          name: darwin-${{ matrix.goarch }}
       - name: Cross-build CLI (not executed; no macOS runner)
         run: go build -trimpath -ldflags="-s -w -X main.version=$VERSION" -o dist/valet ./cmd/valet
       - name: Compile darwin test binaries
@@ -164,6 +226,11 @@ jobs:
           name: valet-darwin-${{ matrix.goarch }}
           path: dist/valet
           if-no-files-found: error
+      - uses: ./.github/actions/go-cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with:
+          name: darwin-${{ matrix.goarch }}
+          save: 'true'
 
   s3-compatible:
     name: s3-compatible (${{ matrix.backend }})
@@ -182,12 +249,24 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          cache-dependency-path: go.sum
+          cache: false
+      - uses: ./.github/actions/go-cache
+        with:
+          name: s3-${{ matrix.backend }}
+      - name: Cache MinIO server build
+        if: matrix.backend == 'minio'
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/minio-build
+          # MinIO is built from a pinned commit; rebuild only when that pin or
+          # the Go toolchain (go.mod) changes.
+          key: minio-${{ hashFiles('.github/scripts/test-s3-compatible.sh', 'go.mod') }}
       - name: Real release and race CLI acceptance against container
         env:
           BACKEND: ${{ matrix.backend }}
           CONTAINER_RUNTIME: docker
           VALET_S3_LOG_DIR: ${{ runner.temp }}/s3-${{ matrix.backend }}
+          MINIO_BUILD_DIR: ${{ runner.temp }}/minio-build
           TMPDIR: ${{ runner.temp }}
         run: bash .github/scripts/test-s3-compatible.sh "$BACKEND"
       - name: Upload backend acceptance evidence
@@ -197,6 +276,11 @@ jobs:
           name: s3-compatibility-${{ matrix.backend }}
           path: ${{ runner.temp }}/s3-${{ matrix.backend }}/
           if-no-files-found: warn
+      - uses: ./.github/actions/go-cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with:
+          name: s3-${{ matrix.backend }}
+          save: 'true'
 
   generated-scale:
     needs: quality
@@ -219,3 +303,23 @@ jobs:
         with:
           name: generated-scale-result
           path: benchmarks/scale-result.json
+
+  # The one required status check. It passes when every job passed, or when
+  # the change is documentation-only and the Go jobs were skipped.
+  ci-result:
+    name: CI result
+    if: always()
+    needs: [changes, quality, go-install, verify, darwin-cross-build, s3-compatible]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Required jobs passed or were skipped for a docs-only change
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          CODE: ${{ needs.changes.outputs.code }}
+        run: |
+          printf '%s\n' "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          printf '%s\n' "$NEEDS" | jq -e --arg code "$CODE" '
+            .changes.result == "success" and
+            (del(.changes) | to_entries | all(
+              .value.result == "success" or ($code != "true" and .value.result == "skipped")))'

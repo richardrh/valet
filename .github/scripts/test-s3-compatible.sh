@@ -41,10 +41,15 @@ if [[ "$backend" == minio ]]; then
   # Build the same immutable source used by the original MinIO gate, without
   # substituting an older third-party image. Scratch adds no moving base image.
   minio_version=v0.0.0-20250907161309-07c3a429bfed
-  GOBIN="$work/minio-build" CGO_ENABLED=0 go install "github.com/minio/minio@$minio_version"
-  cp "$(go env GOMODCACHE)/github.com/minio/minio@$minio_version/LICENSE" "$work/minio-build/LICENSE"
+  # MINIO_BUILD_DIR lets CI keep the build between runs; it is keyed on this
+  # script, so changing minio_version rebuilds.
+  minio_build="${MINIO_BUILD_DIR:-$work/minio-build}"
+  if [[ ! -x "$minio_build/minio" || ! -s "$minio_build/LICENSE" ]]; then
+    GOBIN="$minio_build" CGO_ENABLED=0 go install "github.com/minio/minio@$minio_version"
+    cp "$(go env GOMODCACHE)/github.com/minio/minio@$minio_version/LICENSE" "$minio_build/LICENSE"
+  fi
   image=localhost/valet-ci-minio:07c3a429bfed
-  "$runtime" build --file .github/containers/minio.Dockerfile --tag "$image" "$work/minio-build"
+  "$runtime" build --file .github/containers/minio.Dockerfile --tag "$image" "$minio_build"
   "$runtime" run --detach --name "$container" --cidfile "$work/container-id" \
     --publish "127.0.0.1:$port:9000" \
     --tmpfs /data:rw,mode=1777 --tmpfs /tmp:rw,mode=1777 \
