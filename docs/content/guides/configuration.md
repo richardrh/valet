@@ -6,14 +6,17 @@ prev: getting-started/quickstart
 next: guides/schema
 ---
 
-Valet accepts local `.yaml`, `.yml` and `.json` pipeline documents. JSON uses
-strict RFC syntax; YAML and JSON share duplicate-key detection, shape
-validation, exact-number preservation, defaults and semantic validation.
+A pipeline is a local `.yaml`, `.yml` or `.json` file (strict RFC JSON). See [pipeline file](../../concepts/pipelines/#pipeline-file).
 
 ## Top-level structure
 
-This pipeline returns an aggregate JSON report on stdout. Artifact publication
-is optional; add an output destination only when you need persisted results.
+| Section | Key fields | Defaults |
+|---|---|---|
+| `source` | `uris` **or** `prefix` + `filter` + `recursive` | — |
+| `input` | `type`, `schema`, `on_malformed`, `infer_schema_length`, `parquet.statistics` | `type` from suffix; `abort`; `1000000`; `off` |
+| `execution` | `memory_budget`, `batch_target`, `max_record_bytes`, `workers` | `workers: 1` |
+| `output` | `uri`, `mode`, `format`, `parquet.statistics` | `mode`: `report` without URI, else `all`; `none` |
+| `rules`, `dataset_rules` | see [rules](../../rules/) | `[]` |
 
 ```yaml
 name: Orders validation
@@ -40,19 +43,11 @@ rules: []
 dataset_rules: []
 ```
 
-CLI `-i` and `-o` replace the configured input and output. Explicit execution
-flags override the document. Relative references, mappings and schema files
-resolve from the pipeline document's directory.
-
-Omit `output.uri` (and `-o`) for one aggregate JSON summary on stdout and no
-artifact files or manifest. The output mode defaults after CLI overrides:
-`report` without a URI, `all` with one. Explicit `all` or `failures` requires a
-destination when running `validate`; explicit `report` with a destination
-publishes issues/reports and a manifest, but no row files or raw rejects.
+- `-i` / `-o` and execution flags override the document.
+- Relative references, mappings and schema files resolve from the pipeline's directory.
+- No output URI → stdout JSON report only. See [output modes](../../concepts/results/#output-modes).
 
 ## Sources
-
-Use one ordered list:
 
 ```yaml
 source:
@@ -61,8 +56,6 @@ source:
     - s3://bucket/data/part-002.csv
 ```
 
-Or deterministic prefix discovery:
-
 ```yaml
 source:
   prefix: s3://bucket/data/
@@ -70,25 +63,15 @@ source:
   recursive: true
 ```
 
-Explicit lists and prefixes are mutually exclusive. Local and S3 discovery is
-sorted deterministically.
+`uris` and `prefix` are mutually exclusive; discovery is sorted deterministically.
 
 ## Input formats
 
-Supported values are `csv`, `json`, `ndjson` and `parquet`. If omitted, the
-format is inferred from the decoded source suffix; an explicit type always
-wins. A trailing `.gz` is ignored during inference for text formats.
-
-CSV supports headers, configured delimiters and raw-string or inferred modes.
-JSON is a streamed top-level array of objects; NDJSON is one object per
-nonblank line. Parquet accepts flat required/optional schemas and validates
-metadata and pages before decoding.
+`type`: `csv`, `json`, `ndjson` or `parquet`; inferred from the suffix if omitted. See [inputs and formats](../../concepts/pipelines/#inputs-and-formats).
 
 ### Malformed CSV rows
 
-By default a malformed record stops the run with exit `2` and an error naming
-the file and line. A CSV row with the wrong number of fields can instead be
-rejected, so the rest of the file is still checked:
+Default: a malformed record stops the run with exit `2`. To reject CSV rows with the wrong field count and continue:
 
 ```yaml
 input:
@@ -96,17 +79,14 @@ input:
   on_malformed: reject   # default: abort
 ```
 
-Each such row counts in `total`, lands in the error bucket with every column
-invalid, and reports one `INGEST_MALFORMED` issue, for example `found 3 fields;
-the header has 2`. With an output destination, its original fields are written
-to rejects as a JSON array, for example `"raw": ["2","3","EXTRA"]`. Column rules
-do not also fail for the row.
+| Rejected row | Result |
+|---|---|
+| Counts | In `total`, error bucket, every column invalid |
+| Issue | One `INGEST_MALFORMED`, e.g. `found 3 fields; the header has 2` |
+| Rejects output | Original fields as JSON array, e.g. `"raw": ["2","3","EXTRA"]` |
+| Column rules | Not also failed |
 
-Other malformed input still stops the run even with `reject`: unclosed or stray
-quotes, invalid UTF-8, blank lines, oversized records, and malformed JSON or
-NDJSON. Their record boundaries or original bytes cannot be recovered with
-certainty, so rejecting them could hide or invent rows. Mapping files
-(`transforms`) are configuration and always fail on malformed rows.
+Always fatal: bad quotes, invalid UTF-8, blank lines, oversized records, malformed JSON/NDJSON, malformed `transforms` mapping files. [Engineering spec](https://github.com/richardrh/valet/blob/main/docs/engineering/spec.md)
 
 ## Explicit schemas
 
@@ -124,13 +104,9 @@ input:
         formats: ["%Y-%m-%dT%H:%M:%S%:z"]
 ```
 
-Explicit schemas preserve exact identifiers and numeric values. Recoverable
-conversion failures produce ingestion issues and reject records; they do not
-silently become ordinary nulls.
+Failed conversions become ingestion issues and rejected records, not nulls.
 
 ### Generate a schema from a sample file
-
-Instead of typing the columns, let Valet write the block from a sample file:
 
 ```bash
 valet plan -p pipeline.yml -i sample.csv --format pipeline
@@ -149,30 +125,20 @@ input:
       note: {type: string}
 ```
 
-Paste it into the pipeline and review it. For CSV and JSON the types are
-inferred from up to `input.infer_schema_length` rows (default 1,000,000), even
-when the pipeline reads raw strings; inference produces `int64`, `float64`,
-`bool` and `string`, so change money columns to
-`{type: decimal, precision: …, scale: …}` and date columns to `date` or
-`timestamp` with their `formats`. For Parquet the block uses the file's own
-types, including decimal precision and scale and timestamp time zones.
+| Format | Types |
+|---|---|
+| CSV, JSON | Inferred from `infer_schema_length` rows: `int64`, `float64`, `bool`, `string` only |
+| Parquet | File's own types, incl. decimal precision/scale and time zones |
+
+Review before use: change money to `{type: decimal, precision: …, scale: …}` and dates to `date`/`timestamp` with `formats`.
 
 ### Choose schema inspection or value conversion
 
-During `valet validate`, `input.schema` controls conversion and output types.
-During `valet schema`, the same declaration is compared with the actual
-Parquet types without conversion; a convertible string column does not count
-as an already-integer column.
+`valet validate` converts values to `input.schema`; `valet schema` only compares it with Parquet footer types. See [schema-only Parquet checks](../schema/).
 
 ```bash
 valet schema -p pipeline.yml -i input.parquet
 ```
-
-This command checks supported footer metadata only, reports zero checked rows
-and creates no row outputs or completion manifest. `nullable: false`, date
-formats, `type_check`, row rules and references still require full validation.
-See [schema-only Parquet checks](../schema/) for a complete example, the
-supported-check table, JSON report and exit codes.
 
 ### Output policy and optional Parquet statistics
 
@@ -188,32 +154,18 @@ output:
     statistics: none      # none (default), bounded
 ```
 
-For stdout-only validation, omit this `output` block. Setting `mode: all` or
-`mode: failures` without a destination is an error, not a request to discard
-those artifacts.
-
-Use `--output-mode` and `--parquet-stats` to override these policies. Writer
-statistics do not grant reader trust. Report-only still validates the data by
-default. Without a destination it returns only stdout JSON; with a destination
-it publishes reports and a manifest, but no row buckets or raw rejects.
-See [output modes and metadata trust](../validation-modes/) before
-enabling producer-statistics shortcuts.
+`all`/`failures` need a destination. Override with `--output-mode` and `--parquet-stats`; see [validation modes](../validation-modes/).
 
 ## Execution limits
 
-`memory_budget` limits managed decoder, batch, rule-state and publication
-reservations; it is not a process RSS limit. `batch_target` controls target
-Arrow batch size. `max_record_bytes` bounds one decompressed CSV row, one JSON
-record, or one Parquet row/page. It does **not** bound the total input file.
-Multi-gigabyte files stream through the same reusable decoder and batch state.
+| Field | Limits |
+|---|---|
+| `memory_budget` | Valet-managed memory; not process RSS |
+| `batch_target` | Target batch size |
+| `max_record_bytes` | One record or Parquet page, **not** the file |
+| `workers` | 1–32, default 1; does not raise the budget |
 
-`workers` accepts 1–32 and defaults to 1. Larger values enable bounded,
-ordered execution overlap and parallel Parquet row-group verification/decoding;
-stateful rule evaluation and output publication retain a single ordered owner.
-Worker admission is constrained by the available managed budget, row-group
-sizes and decoder workspaces. Increasing workers does not increase the budget.
-
-Recommended starting point for a 1 GiB pod:
+Starting point for a 1 GiB pod, with `GOMEMLIMIT=768MiB`:
 
 ```yaml
 execution:
@@ -223,26 +175,15 @@ execution:
   workers: 1
 ```
 
-Set `GOMEMLIMIT=768MiB` to retain process headroom. Row-local checks remain
-bounded as file size grows. Exact uniqueness and reference indexes grow with
-distinct-key cardinality and fail explicitly if their state exceeds the
-managed budget; there is no hidden disk spill or approximate fallback.
+Uniqueness and reference indexes fail at the budget. See [memory budget](../../concepts/execution/#memory-budget).
 
 ## Editor support and AI agents
 
-A JSON Schema for pipeline documents is published at
-[`schema/v1/pipeline.schema.json`](https://richardrh.github.io/valet/schema/v1/pipeline.schema.json)
-and attached to each GitHub release. Editors that use the YAML or JSON
-language servers (VS Code, JetBrains IDEs, Neovim) then complete keys, check
-types and allowed values, and flag typos such as `chekcs` as you type.
-
-In YAML, add a modeline as the first line:
+The [pipeline JSON Schema](https://richardrh.github.io/valet/schema/v1/pipeline.schema.json) gives YAML/JSON editors completion and typo checks.
 
 ```yaml
 # yaml-language-server: $schema=https://richardrh.github.io/valet/schema/v1/pipeline.schema.json
 ```
-
-In JSON, add a `$schema` key. Valet accepts and ignores it:
 
 ```json
 {
@@ -251,22 +192,16 @@ In JSON, add a `$schema` key. Valet accepts and ignores it:
 }
 ```
 
-The schema checks structure, value types and allowed values. Checks that span
-several fields or need the data, such as `min <= max` or whether a column
-exists, are still reported by `valet plan` and `valet validate`.
+Valet ignores `$schema`; `valet plan` still runs cross-field and data checks.
 
-For AI agents, the site publishes [`llms.txt`](https://richardrh.github.io/valet/llms.txt),
-an index of every page, and [`llms-full.txt`](https://richardrh.github.io/valet/llms-full.txt),
-all documentation as one Markdown file. Every page is also available as
-Markdown: `…/guides/configuration/` is at `…/guides/configuration.md`. An MCP
-client can serve the index with [mcpdoc](https://github.com/langchain-ai/mcpdoc):
+| For agents | Content |
+|---|---|
+| [`llms.txt`](https://richardrh.github.io/valet/llms.txt) | Page index |
+| [`llms-full.txt`](https://richardrh.github.io/valet/llms-full.txt) | All docs, one file |
+| `…/guides/configuration.md` | Any page as Markdown |
 
 ```sh
 uvx --from mcpdoc mcpdoc --urls "Valet:https://richardrh.github.io/valet/llms.txt"
 ```
 
-## Next
-
-- Use the [rules cookbook](../../rules/) for row, schema and dataset assertions.
-- See [operations](../operations/) for pod sizing and S3 behavior.
-- See [performance](../performance/) for measured Parquet throughput and schema-only inspection.
+Next: [rules cookbook](../../rules/), [operations](../operations/), [performance](../performance/).

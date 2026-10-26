@@ -9,36 +9,21 @@ next: getting-started/installation
 
 ## What is Valet?
 
-Valet is a **command-line data quality gate for file-based pipelines**. Use it
-before ingesting a file into a lakehouse or warehouse, or before passing data
-to another job.
-
-You describe checks in YAML or JSON and run them against local or
-S3-compatible CSV, Parquet, NDJSON or JSON files. By default, Valet returns one
-aggregate JSON report on stdout and an exit code, without rewriting the data
-or creating output files.
+A command-line validation gate for CSV, Parquet, NDJSON or JSON files (local or S3-compatible) before a lakehouse, warehouse or next job.
+Checks live in YAML or JSON; by default you get one aggregate JSON report on stdout and an exit code, with no rewritten data or output files.
 
 ## Why Valet?
 
-Reading a file successfully does not establish that its contents meet your
-requirements. Valet checks expected schemas, missing values, ranges, duplicate
-keys, references and relationships between columns before those problems
-propagate downstream. Keep the checks in version control and run the same
-rules wherever the file enters your pipeline.
-
-Your caller owns the next step: continue after exit `0`, block ingestion after
-failed checks (`1`), and handle execution failures separately (`2`). Warnings
-do not block by default; set mandatory rules to `level: error`.
-
-Valet is a self-contained CLI, not another service to deploy. It does not
-schedule jobs or upload files into a lakehouse. Keep your existing uploader
-and validate the same immutable input before invoking it.
+- **Readable ≠ correct:** checks schemas, missing values, ranges, duplicate keys, references and column relationships before problems propagate. Same versioned rules wherever the file enters.
+- **Caller owns the next step:** continue on exit `0`, block on failed checks (`1`), handle execution failures separately (`2`). Warnings do not block by default; set mandatory rules to `level: error`.
+- **Self-contained CLI, not a service:** no scheduling or lakehouse upload. Keep your uploader; validate the same immutable input before invoking it.
 
 ## Start here
 
 {{< cards >}}
   {{< card link="installation" title="Installation" subtitle="Download a release or build the CLI." >}}
   {{< card link="quickstart" title="Quickstart" subtitle="Validate the sample, then check its Parquet schema." >}}
+  {{< card link="../concepts" title="Concepts" subtitle="Pipelines, rules, results and execution." >}}
   {{< card link="../guides/schema" title="Schema-only Parquet checks" subtitle="Check columns and types without scanning rows." >}}
   {{< card link="../rules" title="Rules cookbook" subtitle="Choose schema, row and dataset checks." >}}
 {{< /cards >}}
@@ -52,21 +37,17 @@ and validate the same immutable input before invoking it.
 | Check row values, conversions, references and dataset rules | `valet validate -p pipeline.yml -i input.parquet -o results/` | Checked rows, issues and a terminal manifest |
 | Preview configuration, schemas, passes and required state | `valet plan -p pipeline.yml -i input.parquet` | Execution-plan JSON; not a validation result |
 
-Only `schema` is Parquet-only. Full validation supports all four input formats.
-Both schema inspection and planning may succeed even when a row value would
-fail full validation. See [schema-only checks](../guides/schema/) for the exact
-checks supported without reading data.
+Only `schema` is Parquet-only; full validation supports all four formats. `schema` and `plan` may succeed even when a row value would fail full validation — see [schema-only checks](../guides/schema/).
 
 ## Full validation lifecycle
 
-1. Optionally run `valet plan` to understand the work and managed state.
-2. Run `valet validate` to read, convert and check the data.
-3. Without an output URI, read the aggregate stdout JSON; no files or manifest
-   are created. With `-o`/`output.uri`, read the published `manifest.json` and
-   follow its artifact references. Partial artifacts without it are incomplete.
+1. Optional: `valet plan` to see the work and managed state.
+2. `valet validate` reads, converts and checks the data.
+3. Read results:
+   - no output URI → aggregate stdout JSON; no files or manifest.
+   - `-o`/`output.uri` → published `manifest.json` and its artifact references; partial artifacts without it are incomplete.
 
-`valet schema` is separate: read its JSON report from stdout. It never publishes
-the normal row buckets or manifest.
+`valet schema` is separate: JSON report on stdout only; never publishes row buckets or a manifest.
 
 ## Exit codes
 

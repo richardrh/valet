@@ -5,486 +5,151 @@ type: docs
 toc: true
 ---
 
-Valet can check schemas, individual rows and whole datasets. For row rules,
-a row violates a rule when any check in it fails; at most one issue is emitted
-for that rule and row, even when several checks fail.
-
-**Only checking Parquet names and types?** Use `valet schema` with
-`required_columns`, `schema_matches` in `strict` mode, or `input.schema`.
-These are distinct from value checks. The [schema-only guide](../guides/schema/#which-checks-run)
-lists exactly what runs and what is reported as not evaluated.
-
-Use `level: error` when a failure must make validation fail and `level: warn`
-when the row should remain a warning. Every code must be stable and unique
-across `rules` and `dataset_rules`.
+Check schemas, individual rows and whole datasets. A row violates a rule when any of its checks fails; at most one issue is emitted per rule and row.
 
 ```yaml
 rules:
-  - code: STABLE_RULE_CODE
+  - code: STABLE_RULE_CODE      # stable, unique across rules and dataset_rules
     name: Human-readable name
-    level: error
+    level: error                # error: fails validation; warn: row stays a warning
     column: default_column
     message: Explanation shown for failures
     checks:
       - type: check_name
-        parameter: value
+        parameter: value        # inline beside type; no nested params field
 ```
 
-Check parameters are inline beside `type`; there is no nested `params` field.
-A check-level `column` or `columns` overrides the rule-level `column`.
-
-## Required and nonblank values
-
-Reject null or missing values:
-
-```yaml
-- code: CUSTOMER_ID_REQUIRED
-  level: error
-  column: customer_id
-  checks:
-    - type: not_null
-```
-
-Reject null, missing, empty, or Unicode-whitespace-only strings:
-
-```yaml
-- code: CUSTOMER_NAME_REQUIRED
-  level: error
-  column: customer_name
-  checks:
-    - type: not_blank
-```
-
-Check only whether a JSON field/path was present; explicit null remains present:
-
-```yaml
-- code: EXTERNAL_ID_PRESENT
-  level: error
-  column: external_id
-  checks:
-    - type: is_present
-```
-
-## Data types
-
-Choose the type control that matches the question:
-
-| Question | Use |
-|---|---|
-| Does this Parquet file have the expected column types? | `valet schema` with an expected schema; no row scan |
-| Can each value be converted into a stable output type? | `input.schema` during `valet validate` |
-| Can this cell be interpreted as a type, as a validation rule? | `type_check` during `valet validate` |
-
-`type_check` is not executed by the schema-only command, even if its expected
-type resembles a Parquet column type. Use the metadata schema controls for that
-purpose.
-
-### Convert the input into an explicit schema
-
-Use `input.schema` when the output must have stable Arrow types. Failed
-conversions become structured ingestion rejects rather than ordinary rule
-issues.
-
-```yaml
-input:
-  type: csv
-  schema:
-    extra_fields: error
-    columns:
-      order_id: {type: string}
-      quantity: {type: int64}
-      unit_price: {type: decimal, precision: 12, scale: 2}
-      event_date: {type: date, formats: ["%F"]}
-      observed_at:
-        type: timestamp
-        timezone: UTC
-        formats: ["%Y-%m-%dT%H:%M:%S%:z"]
-```
-
-### Check whether a value can be interpreted as a type
-
-Use `type_check` for a row-level issue, especially with `mode: raw_strings`:
-
-```yaml
-- code: QUANTITY_IS_INTEGER
-  level: error
-  column: quantity
-  checks:
-    - type: type_check
-      expected_type: int64
-```
-
-### Type names
-
-Type names follow C's fixed-width integers (without `_t`), Python, and
-Arrow/Parquet. Any letter case is accepted. Reports and `valet plan` always
-print the Arrow/Parquet name in the last column.
-
-| Values | Write | Reported as |
-|---|---|---|
-| Signed integers | `int8`, `int16`, `int32`, `int64`; `int` = `int64` | `int8` … `int64` |
-| Unsigned integers | `uint8`, `uint16`, `uint32`, `uint64` | `uint8` … `uint64` |
-| 32-bit floats | `float32` | `float32` |
-| 64-bit floats | `float64`, `double`; `float` = `float64` | `float64` |
-| Exact decimals | `decimal` with `precision` (1–38) and `scale` | `decimal` |
-| Booleans | `bool`, `boolean` | `bool` |
-| Text | `str`, `string`, `utf8`, `large_string` | `string` |
-| Bytes | `bytes`, `binary`, `large_binary` | `binary` |
-| Dates | `date`, `date32`, `date64` | `date` |
-| Timestamps | `datetime`, `timestamp` | `timestamp` |
-| Nulls only | `null` | `null` |
-
-`int` and `float` follow Python and are 64-bit. In C, Arrow (pyarrow prints
-`float32` as `float`) and Parquet (`FLOAT`), `float` is 32-bit; write
-`float32` for those columns.
-
-Names whose size or sign varies between platforms are rejected with the
-spelling to use instead, for example:
-
-```text
-input.schema column "qty" type "long" is not a supported type: long is 32-bit on Windows and 64-bit on Linux and macOS; write int32 or int64
-```
-
-C names with `_t` (`int32_t`) are answered with the name to write (`int32`).
-
-## Positive values and numeric ranges
-
-Strictly greater than zero:
-
-```yaml
-- code: QUANTITY_POSITIVE
-  level: error
-  column: quantity
-  checks:
-    - type: valid_range
-      min: 0
-      exclusive_min: true
-```
-
-Inclusive range:
-
-```yaml
-- code: PERCENTAGE_RANGE
-  level: error
-  column: percentage
-  checks:
-    - type: valid_range
-      min: 0
-      max: 100
-```
-
-Open interval:
-
-```yaml
-- code: PROBABILITY_OPEN_INTERVAL
-  level: error
-  column: probability
-  checks:
-    - type: valid_range
-      min: 0
-      max: 1
-      exclusive_min: true
-      exclusive_max: true
-```
-
-Bounds are inclusive by default. `exclusive_min: true` requires `min`, and
-`exclusive_max: true` requires `max`. Null passes `valid_range`; combine it
-with `not_null` when null is forbidden.
-
-## Compare two columns
-
-Require `subtotal > discount`:
-
-```yaml
-- code: SUBTOTAL_EXCEEDS_DISCOUNT
-  level: error
-  checks:
-    - type: compare_columns
-      column: subtotal
-      other_column: discount
-      operator: ">"
-```
-
-Require two columns to match:
-
-```yaml
-- code: PAID_TOTAL_MATCHES_SUBTOTAL
-  level: error
-  checks:
-    - type: compare_columns
-      column: paid_total
-      other_column: subtotal
-      operator: "=="
-```
-
-Operators are `==`, `!=`, `<`, `<=`, `>`, and `>=`. Explicit input schemas are
-recommended so numeric, decimal, date, and timestamp comparisons use their
-declared types instead of lexical string ordering.
-
-## Exact columns and names
-
-Require specific columns but allow additional columns:
-
-```yaml
-- code: REQUIRED_COLUMNS
-  level: error
-  checks:
-    - type: required_columns
-      columns: [order_id, customer_id, quantity]
-```
-
-Require exactly the declared names and types, with no missing or additional
-columns:
-
-```yaml
-- code: EXACT_SCHEMA
-  level: error
-  checks:
-    - type: schema_matches
-      mode: strict
-      require_columns: true
-      allow_extra_columns: false
-      columns:
-        order_id: string
-        customer_id: string
-        quantity: int64
-        unit_price: decimal
-        created_at: timestamp
-```
-
-With Parquet input, both examples above can run without row reads:
-
-```bash
-valet schema -p pipeline.yml -i input.parquet
-```
-
-Place the rules under the pipeline's `rules:` key. `mode: strict` compares
-logical schema types; it does not prove non-null, valid-format or in-range
-values. The default `mode: castable` needs full validation to prove value
-conversion and is listed as not evaluated by `valet schema` (although its
-presence/extra-column policies can still be checked).
-
-At error severity, these are schema gates during full validation too. Normal
-validation may apply an explicit input schema first; the schema-only command
-compares the file's actual types without conversion.
-
-`input.schema.extra_fields: error` rejects undeclared input fields, and
-`required: true` requires a declared column to exist. Neither is a substitute
-for `not_null` on the values. See the [schema-only guide](../guides/schema/)
-for report fields, skipped checks and exit codes.
-
-## Allowed and forbidden values
-
-Require membership in an allowed set:
-
-```yaml
-- code: STATUS_ALLOWED
-  level: error
-  column: status
-  checks:
-    - type: valid_values
-      values: [OPEN, PAID, CANCELLED]
-```
-
-Require one exact value:
-
-```yaml
-- code: CURRENCY_IS_USD
-  level: error
-  column: currency
-  checks:
-    - type: equals
-      value: USD
-```
-
-Forbid one value:
-
-```yaml
-- code: TEST_ACCOUNT_FORBIDDEN
-  level: error
-  column: account_type
-  checks:
-    - type: not_equals
-      value: TEST
-```
-
-`equals` fails on a mismatch or null. `not_equals` fails only on equality and
-allows null; add `not_null` if null is forbidden. `all_equal` requires every
-selected column to equal one supplied value.
-
-## String lengths and patterns
-
-```yaml
-- code: COUNTRY_CODE_LENGTH
-  level: error
-  column: country_code
-  checks:
-    - type: valid_length
-      length: 2
-```
-
-```yaml
-- code: EMAIL_FORMAT
-  level: error
-  column: email
-  checks:
-    - type: matches_pattern
-      pattern: '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$'
-```
-
-Lengths count Unicode code points. Regexes use Go regular-expression syntax
-and search unless explicitly anchored.
-
-## Uniqueness
-
-```yaml
-- code: ORDER_ID_UNIQUE
-  level: error
-  column: order_id
-  checks:
-    - type: is_unique
-```
-
-```yaml
-- code: ORDER_LINE_UNIQUE
-  level: error
-  checks:
-    - type: is_unique_composite
-      columns: [order_id, line_number]
-```
-
-Exact uniqueness is a replay-based global check. Every duplicate occurrence,
-including the first, fails. Distinct-key state is charged to the managed-memory
-budget.
-
-## Conditional rules
-
-Only require `closed_at` for closed orders:
+- Check-level `column`/`columns` overrides the rule's `column`; the two are mutually exclusive. Unknown types and parameters are rejected.
+
+## Check reference
+
+Scopes: see [Check scopes](../concepts/rules-and-checks/#check-scopes). `column*` = `column` or `columns` (or the rule's `column`).
+
+| Check | Scope | Parameters | Null | Notes |
+|---|---|---|---|---|
+| `not_null` | row | `column*` | fails | null or missing fails |
+| `not_blank` | row | `column*` | fails | also empty / Unicode-whitespace-only strings |
+| `is_present` | row | `column*` | explicit null passes | only whether the JSON field/path exists |
+| `valid_length` | row | `column*`, `length` | fails | Unicode code points |
+| `min_length` | row | `column*`, `min_length` | fails | code points |
+| `max_length` | row | `column*`, `max_length` | fails | code points |
+| `valid_range` | row | `column*`, `min`, `max`, `exclusive_min`, `exclusive_max` | passes | inclusive by default; `exclusive_min` needs `min`, `exclusive_max` needs `max` |
+| `equals` | row | `column*`, `value` | fails | fails on mismatch |
+| `not_equals` | row | `column*`, `value` | passes | fails only on equality |
+| `all_equal` | row | `columns` (required), `value` | fails | every selected column equals `value` |
+| `has_null_keys` | row | `columns` (required) | fails | |
+| `valid_values` | row | `column*`, `values` | passes | allowed set |
+| `matches_pattern` | row | `column*`, `pattern` | fails | Go regexp; searches unless anchored |
+| `is_unique` | global | `column*` | fails | every duplicate occurrence fails, incl. the first |
+| `is_unique_composite` | global | `columns` (required) | fails | as above |
+| `compare_columns` | row | `column`, `other_column`, `operator` | fails | `==` `!=` `<` `<=` `>` `>=` |
+| `referential_integrity` | reference | `column`, `reference_file`, `reference_column` | distinct from empty | |
+| `referential_integrity_composite` | reference | `columns` (required), `reference_file`, `reference_columns` | distinct from empty | ordered column lists |
+| `required_columns` | schema | `columns` (required) | — | schema gate at `error`; extra columns allowed |
+| `schema_matches` | schema | `columns` (name → type map), `mode`, `require_columns`, `allow_extra_columns` | — | schema gate at `error` |
+| `valid_schema_columns` | schema | `reference_file`, `reference_column` | — | |
+| `type_check` | row | `column*`, `expected_type` | target-dependent | not run by `valet schema` |
+| `date_format` | row | `column*`, `format` or `formats` | passes | |
+| `timestamp_window` | row | `column*`, `min`, `max`, `timezone` | passes | inclusive bounds; offset-less wall times need IANA `timezone` |
+
+- Invalid conversion makes a check unevaluable, not null. Uniqueness state counts against the [memory budget](../concepts/execution/#memory-budget).
+- Relative `reference_file` paths resolve from the pipeline file.
+- `compare_columns`: declare an input schema so numbers, decimals and dates compare by type, not as strings.
+
+## Conditions
+
+`when` limits a rule to matching rows. Allowed only on `row` and `reference` scope checks (conditional global/schema checks are rejected).
+
+- Operators: `eq`, `ne`, `lt`, `le`, `gt`, `ge`, `in`, `is_null`, `is_present`; compose with `all: [...]`.
+- False condition: rule not applicable. Invalid operand: counted as unevaluable.
 
 ```yaml
 - code: CLOSED_AT_REQUIRED
   level: error
   column: closed_at
-  when:
-    column: status
-    operator: eq
-    value: CLOSED
-  checks:
-    - type: not_null
-```
+  when: {column: status, operator: eq, value: CLOSED}
+  checks: [{type: not_null}]
 
-Composed condition:
-
-```yaml
+# composed
 when:
   all:
     - {column: status, operator: eq, value: PAID}
     - {column: refunded, operator: eq, value: false}
 ```
 
-Condition operators are `eq`, `ne`, `lt`, `le`, `gt`, `ge`, `in`, `is_null`,
-and `is_present`. A false condition makes the rule not applicable. An invalid
-condition operand is counted as unevaluable.
+## Dataset metrics
 
-## References
+`dataset_rules` are separate from row rules: `code`, `level`, `metric`, then `min` / `max` / `equals` (`equals` excludes `min`/`max`; `min` ≤ `max`).
 
-```yaml
-- code: CUSTOMER_EXISTS
-  level: error
-  column: customer_id
-  checks:
-    - type: referential_integrity
-      reference_file: references/customers.csv
-      reference_column: customer_id
-```
-
-Composite keys use `referential_integrity_composite` with ordered `columns` and
-`reference_columns`. Relative reference paths resolve from the pipeline file,
-not the process working directory.
-
-## Dates and timestamps
-
-```yaml
-- code: EVENT_DATE_FORMAT
-  level: error
-  column: event_date
-  checks:
-    - type: date_format
-      formats: ["%F", "%d/%m/%Y"]
-```
-
-```yaml
-- code: OBSERVED_WINDOW
-  level: error
-  column: observed_at
-  checks:
-    - type: timestamp_window
-      min: "2026-01-01T00:00:00Z"
-      max: "2026-12-31T23:59:59Z"
-```
-
-Timestamp bounds are inclusive. Wall times without an offset require an IANA
-`timezone` parameter.
-
-## Dataset assertions
-
-Dataset rules are separate from row rules:
+| Metric | Needs | Bounds |
+|---|---|---|
+| `row_count` | no `column`, no `rule_code` | nonnegative integer |
+| `missing_count`, `null_count`, `blank_count`, `conversion_error_count` | `column` | nonnegative integer |
+| `missing_fraction`, `null_fraction`, `blank_fraction`, `conversion_error_fraction` | `column` | 0–1 |
+| `rule_failure_count` / `rule_failure_fraction` | `rule_code` of a known row rule; no `column` | integer / 0–1 |
+| `sum`, `min`, `max`, `avg` | `column` declared numeric in an explicit input schema | any number; `tolerance` (finite, ≥ 0) only with `equals` on float columns |
 
 ```yaml
 dataset_rules:
-  - code: DATASET_NOT_EMPTY
-    level: error
-    metric: row_count
-    min: 1
-
-  - code: CUSTOMER_NULL_RATE
-    level: error
-    metric: null_fraction
-    column: customer_id
-    max: 0.001
-
-  - code: ORDER_TOTAL
-    level: error
-    metric: sum
-    column: subtotal
-    min: 0
+  - {code: DATASET_NOT_EMPTY, level: error, metric: row_count, min: 1}
+  - {code: CUSTOMER_NULL_RATE, level: error, metric: null_fraction, column: customer_id, max: 0.001}
+  - {code: ORDER_TOTAL, level: error, metric: sum, column: subtotal, min: 0}
 ```
 
-Supported metric families are row count; missing/null/blank/conversion counts
-and fractions; rule-failure counts and fractions; and numeric `sum`, `min`,
-`max`, and `avg`.
+## Recipes
 
-## Built-in check reference
+One example per pattern; other checks follow the same shape.
 
-| Check | Main parameters | Null behavior |
-|---|---|---|
-| `not_null` | `column` or `columns` | fails |
-| `not_blank` | `column` or `columns` | fails |
-| `is_present` | `column` or `columns` | explicit null passes |
-| `valid_length` | `length` | fails |
-| `min_length` | `min_length` | fails |
-| `max_length` | `max_length` | fails |
-| `valid_range` | `min`, `max`, `exclusive_min`, `exclusive_max` | passes |
-| `equals` | `value` | fails |
-| `not_equals` | `value` | passes |
-| `all_equal` | `columns`, `value` | fails |
-| `has_null_keys` | `columns` | fails |
-| `valid_values` | `values` | passes |
-| `matches_pattern` | `pattern` | fails |
-| `is_unique` | `column` or `columns` | fails |
-| `is_unique_composite` | `columns` | fails |
-| `compare_columns` | `column`, `other_column`, `operator` | fails |
-| `referential_integrity` | `column`, `reference_file`, `reference_column` | distinct from empty |
-| `referential_integrity_composite` | `columns`, `reference_file`, `reference_columns` | distinct from empty |
-| `required_columns` | `columns` | schema check |
-| `schema_matches` | `columns`, `mode`, `require_columns`, `allow_extra_columns` | schema check |
-| `valid_schema_columns` | `reference_file`, `reference_column` | schema check |
-| `type_check` | `expected_type` | target-dependent |
-| `date_format` | `format` or `formats` | passes |
-| `timestamp_window` | `min`, `max`, optional `timezone` | passes |
+```yaml
+rules:
+  - code: CUSTOMER_ID_REQUIRED
+    level: error
+    column: customer_id
+    checks: [{type: not_null}]
+  - code: QUANTITY_POSITIVE          # > 0; null passes, add not_null to forbid it
+    level: error
+    column: quantity
+    checks: [{type: valid_range, min: 0, exclusive_min: true}]
+  - code: SUBTOTAL_EXCEEDS_DISCOUNT  # rule-level column not needed
+    level: error
+    checks: [{type: compare_columns, column: subtotal, other_column: discount, operator: ">"}]
+  - code: ORDER_LINE_UNIQUE
+    level: error
+    checks: [{type: is_unique_composite, columns: [order_id, line_number]}]
+  - code: CUSTOMER_EXISTS
+    level: error
+    column: customer_id
+    checks:
+      - {type: referential_integrity, reference_file: references/customers.csv, reference_column: customer_id}
+  - code: QUANTITY_IS_INTEGER        # row-level type check, e.g. with mode: raw_strings
+    level: error
+    column: quantity
+    checks: [{type: type_check, expected_type: int64}]
+```
 
-Missing values follow the check's null policy. Invalid conversion state is
-unevaluable rather than silently treated as null.
+### Columns and schema
+
+```yaml
+  - code: EXACT_SCHEMA               # exact names and types, none missing or extra
+    level: error
+    checks:
+      - type: schema_matches
+        mode: strict
+        require_columns: true
+        allow_extra_columns: false
+        columns: {order_id: string, customer_id: string, quantity: int64, unit_price: decimal, created_at: timestamp}
+```
+
+With Parquet input, schema checks run without row reads: `valet schema -p pipeline.yml -i input.parquet`.
+
+| `schema_matches` mode | Behaviour |
+|---|---|
+| `strict` | Compares logical types; does not prove non-null, valid-format or in-range values |
+| `castable` (default) | Needs full validation; `valet schema` reports it not evaluated (presence/extra-column policies still checked) |
+
+- `valet schema` compares actual file types without conversion; `valet validate` may apply `input.schema` first.
+- `input.schema` `extra_fields: error` / `required: true` check columns, not values; they do not replace `not_null`.
+- Type control: `valet schema` (Parquet types, no row scan) · `input.schema` (conversion; failures are ingestion rejects) · `type_check` (rule issue; not run by `valet schema`). Type names and schemas: [Pipelines](../concepts/pipelines/#type-names). Report fields and exit codes: [schema-only guide](../guides/schema/).
 
 ## Runnable example
 
@@ -504,6 +169,4 @@ dist/valet validate \
   --json-output cookbook-summary.json
 ```
 
-A validation exit of `1` is expected because the example intentionally contains
-invalid rows. Follow `manifest_uri` in `cookbook-summary.json`, then the
-manifest's artifact index, to inspect the structured issues.
+Exit `1` is expected: the example contains invalid rows. Follow `manifest_uri` in `cookbook-summary.json`, then the manifest's artifact index, to the structured issues.

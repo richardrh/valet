@@ -7,9 +7,7 @@ sidebar:
   open: true
 ---
 
-Start with pipeline configuration, then choose schema-only or full validation.
-The results guide explains which output to consume; operations, performance
-and CI cover running Valet reliably after the first successful check.
+Configure a pipeline, choose schema-only or full validation, then pick outputs and run it in production or CI.
 
 {{< cards >}}
   {{< card link="configuration" title="Pipeline configuration" subtitle="YAML and JSON structure, sources, schemas and resource controls." >}}

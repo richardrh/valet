@@ -6,25 +6,20 @@ type: docs
 prev: guides/performance
 ---
 
-For **full validation** (`valet validate`), exit `0` means no error-level
-failures (warnings are allowed), and `1` means completed with failed checks.
-Without an output URI, consume the single stdout JSON summary; no files or
-manifest are created. Explicit `-o`/`output.uri` selects manifest-last artifact
-publication. Exit `2` includes operational or presentation failure without a
-committed manifest; exit `3` means artifacts committed but stdout failed.
+Gate on the exit code and stdout JSON ([exit codes](../../concepts/results/#exit-codes)).
 
-For a **schema-only gate**, run `valet schema` and consume its stdout JSON
-instead: exit `0` means schema compatibility, `1` an error-level schema mismatch,
-and `2` an operational/configuration failure. Neither schema outcome publishes
-a normal validation manifest. See [schema-only checks](../schema/) for the
-supported checks and report contract.
+| Exit | `valet validate` | `valet schema` ([schema-only checks](../schema/)) |
+|---|---|---|
+| `0` | No error-level failures (warnings allowed) | Compatible |
+| `1` | Failed checks | Error-level schema mismatch |
+| `2` | Operational/presentation failure; no manifest | Operational/configuration failure |
+| `3` | Artifacts committed; stdout failed | — |
+
+Without `-o`/`output.uri`, `validate` writes only the stdout summary. `schema` never publishes a validation manifest.
 
 ## GitHub Actions example
 
-This workflow builds Valet, captures its stdout report, uploads that report for
-inspection and fails the job when data validation fails. The bundled fixture
-intentionally exits `1` because a record ID is missing. Omit `output.uri` from
-your pipeline to use this aggregate-only path.
+The bundled fixture exits `1` (missing record ID). Omit `output.uri` for this aggregate-only path.
 
 ```yaml
 name: Validate data
@@ -82,173 +77,83 @@ jobs:
 
 ## Consume the summary
 
-The workflow saves the default stdout JSON with shell redirection. The shell
-creates that file; Valet itself creates no report directory or manifest.
-Operational failures may leave an empty or incomplete redirected file: parse
-the report only after exit `0` or `1`. After an operational failure, inspect
-stderr instead.
-
-Gate a separate lakehouse ingestion step on successful validation. In the
-workflow above, place ingestion after **Enforce data quality** so normal
-GitHub Actions failure handling blocks it when checks fail. Use `level: error`
-for mandatory checks; warning-level failures still permit exit `0`. Upload
-the same immutable input that Valet checked.
-
 ```bash
 jq '{validation, error, rule_counts}' validation-summary.json
 ```
 
-For artifact runs, read entries with `kind: issues` or `kind: rejects` for
-row-level details. Do not discover a committed artifact run by listing files;
-only its durable `manifest.json` marks a consumable artifact result.
-
-To request those artifact files, explicitly add `-o validation-output` and
-include `validation-output/` in the uploaded paths. The stdout summary then
-includes `manifest_uri`. `--output-mode report` with that destination publishes
-detailed issues and reports without rewriting row data; omit the destination
-entirely when the caller only needs the aggregate report.
+- Parse only after exit `0`/`1`; otherwise read stderr.
+- Run lakehouse ingestion after **Enforce data quality**, on the same immutable input.
+- Mandatory checks need `level: error`; warnings still exit `0`.
+- Artifacts: add `-o validation-output`, upload `validation-output/`; the summary gains `manifest_uri`. Read `kind: issues`/`kind: rejects` entries from `manifest.json`, never by listing files ([results](../../concepts/results/#manifest)).
+- `--output-mode report` publishes issues and reports without rewriting row data.
 
 ## JSON logs
-
-Use structured stderr when an orchestrator needs machine-readable pre-commit
-failures:
 
 ```bash
 valet validate ... --log-format json 2>valet.log.ndjson
 ```
 
-Fatal framing, configuration, I/O and resource failures return exit `2` and do
-not publish a terminal manifest.
+Framing, configuration, I/O and resource failures exit `2` with no manifest.
 
 ## S3 jobs
 
-Use the standard AWS SDK credential chain through your runner's workload
-identity, OIDC role or secret provider. Do not put static credentials in the
-pipeline document. Source and output can use separate endpoint, region and
-profile settings when required.
+AWS SDK credential chain (workload identity, OIDC, secret provider); no static credentials in the pipeline. Source and output may differ in endpoint, region, profile.
 
 ## Run checks locally
-
-From the repository root:
 
 ```bash
 go test ./...
 go test -tags=integration ./integration -timeout 20m
 ```
 
-Object-store cases skip when their endpoint and credentials are absent. For
-actual S3-compatible acceptance, run the disposable container harness:
+Object-store cases skip without endpoint and credentials. Real S3-compatible acceptance:
 
 ```bash
 bash .github/scripts/test-s3-compatible.sh minio
 bash .github/scripts/test-s3-compatible.sh rustfs
 ```
 
-The harness needs Go, a C compiler for the race build, Docker, curl and jq.
-For rootless Podman, prefix each command with `CONTAINER_RUNTIME=podman`.
-It uses loopback bindings and local-only credentials, removes its containers
-and temporary data, and fails on any selected skip. Set `VALET_S3_LOG_DIR` to
-retain JSON test events and server logs.
-
+- Needs Go, a C compiler, Docker, curl, jq. Rootless Podman: prefix `CONTAINER_RUNTIME=podman`.
+- Loopback bindings, local-only credentials; cleans up containers and data; any selected skip fails. `VALET_S3_LOG_DIR` keeps test events and server logs.
 
 ## Repository CI and release publishing
 
-The repository's automation lives in `.github/workflows/`. It uses the Go
-version from `go.mod` (currently Go 1.27.3); do not lower the version merely to
-fit a runner's preinstalled toolchain.
+Workflows in `.github/workflows/` use Go from `go.mod` (1.27.3); don't lower it for a runner. Test-gate rationale: [Engineering spec](https://github.com/richardrh/valet/blob/main/docs/engineering/spec.md).
 
 ### CI contract
 
-- `go.yml` runs on branch pushes, pull requests and manual dispatch, and can
-  be called by the release workflow. Tag pushes do not start a duplicate
-  standalone CI run.
-- Quality gates verify modules, formatting, vet, race tests, vulnerability
-  scanning with pinned `govulncheck` v1.9.0, and workflow validation with pinned
-  `actionlint` v1.7.12.
-- A `go-install` job installs the checkout into an isolated `GOBIN` and runs
-  executable acceptance tests against that installed CLI. Tagged releases also
-  run `go install github.com/richardrh/valet/cmd/valet@<tag>` through the module
-  distribution path and exercise that executable. Release publication waits
-  for these installation checks as well as the existing build/storage gates.
-- Linux amd64, Linux arm64 and Windows amd64 run native unit tests and CLI
-  acceptance against the version-stamped binaries that become release assets.
-- Darwin amd64 and arm64 are cross-built and their tests compiled on Linux.
-  They are not executed on macOS, code-signed or notarized.
-- S3-compatible acceptance is a required two-backend container matrix:
-  MinIO source `07c3a429bfed` and RustFS 1.0.3. RustFS is pinned by an immutable
-  image digest. MinIO is built from the existing pinned source into a scratch
-  container because its official release image is no longer publicly pullable;
-  no outdated third-party image is silently substituted.
-  Each backend runs the real S3, validation-mode and stdout-only cases against
-  release and race-instrumented child CLIs, including owned versioned buckets.
-  Local-only credentials and loopback bindings isolate the servers. A selected
-  test skip or missing test run fails the gate. JSON test events and server logs
-  are uploaded as `s3-compatibility-minio` and `s3-compatibility-rustfs`.
-  Shared user buckets are never reconfigured.
-- AWS verification is outside this release scope, not a prerequisite.
-  Optional AWS tests require explicit opt-in, a bucket and scoped credentials;
-  they are excluded from the compatible-server gate and never counted as
-  verified. MinIO/RustFS results do not establish AWS IAM/KMS behavior.
-- The generated scale workload is opt-in through the CI manual dispatch
-  `run_scale` input. It generates separate 10 GiB and 100 GiB Arrow streams;
-  normal CI and releases do not run this workload.
-- `docs.yml` separately builds production Hugo documentation for
-  documentation-related pull requests and `main` pushes, or manual dispatch.
-  It pins Hugo Extended 0.156.0 and verifies the download against the official
-  Hugo release checksums. PR builds have only `contents: read` and work before
-  Pages is configured; they never invoke Pages configuration, upload or
-  deployment. They use the repository's default Pages URL for the base URL.
-  Publishing runs use the base URL returned by GitHub Pages, including a
-  configured custom domain.
+| Job / area | What runs |
+|---|---|
+| `go.yml` | Branch pushes, PRs, manual dispatch, release calls; not tag pushes |
+| Quality | Modules, format, vet, race tests, `govulncheck` v1.9.0, `actionlint` v1.7.12 |
+| `go-install` | CLI acceptance from isolated `GOBIN`; tags also test `go install github.com/richardrh/valet/cmd/valet@<tag>` |
+| Native | Linux amd64/arm64, Windows amd64 on the release binaries |
+| Darwin | amd64/arm64 cross-built, tests compiled on Linux; not run, signed or notarized |
+| S3-compatible | MinIO `07c3a429bfed` + RustFS 1.0.3; logs `s3-compatibility-minio`/`-rustfs` |
+| AWS | Optional opt-in; not a release gate |
+| Scale | Manual input `run_scale`: 10 GiB and 100 GiB Arrow streams |
+| `docs.yml` | Hugo Extended 0.156.0 (checksum-verified) for docs PRs, `main`, manual |
+
+Release publication waits for `go-install` and build/storage gates. `docs.yml` PR builds have `contents: read` only, use the repository's default Pages URL as base URL and never touch Pages (they work before Pages exists; separate concurrency groups can't cancel deploys). Publishing runs only on `main` push/manual and use the Pages base URL (custom domain included).
 
 ### One-time GitHub setup
 
-These are repository settings to apply after creating the GitHub repository;
-the workflows do not change them for you.
+Repository settings; the workflows don't change them for you.
 
-1. In **Settings → Actions → General**, enable GitHub Actions and allow the
-   actions used by these workflows. Choose the read-only default workflow
-   token permission; jobs request their own minimum additional permissions.
-   No personal access token or repository secret is needed for CI, release
-   publishing or Pages. Organizational policy must permit the workflows'
-   explicit `contents: write`, `pages: write` and `id-token: write` grants.
-   Fork PR workflows may require a maintainer's approval under the repository's
-   Actions policy.
-2. Set the default branch to `main`. Push the repository and let branch CI
-   report its actual check names. Configure a branch-protection rule or
-   ruleset for `main` requiring pull-request review and the non-optional Go CI
-   quality, native acceptance, Darwin compilation and S3-compatible checks.
-   Select the reported matrix check names, rather than guessing them before
-   the first run. Do not require the opt-in scale job. The documentation
-   workflow is path-filtered; requiring its check on every PR can leave
-   unrelated changes pending forever unless those path filters are removed.
-3. In **Settings → Pages → Build and deployment**, choose **GitHub Actions**
-   as the source. Do not select a publishing branch or commit generated
-   `docs/public/` output. The workflow reads the site configuration but does
-   not enable Pages automatically.
-4. Create or review the **github-pages** environment under **Settings →
-   Environments**. Set deployment branches/tags to **Selected branches and
-   tags** and allow the `main` branch only, not tags or wildcard branches.
-   Add required reviewers if desired and supported by the repository plan.
-   The workflow also guards publishing to `main` push/manual runs. PR refs use
-   separate concurrency groups, so PR builds cannot block or cancel a
-   deployment.
-5. Run **Documentation** manually with `main` selected, or push a documentation
-   change to `main`, and inspect the deployment URL. A manual run on another
-   branch builds only. Missing Pages setup may fail a trusted publishing run,
-   but never a PR production build.
-6. Restrict creation of release tags to trusted maintainers with a tag ruleset
-   where available. Review workflow changes carefully: a release job uses the
-   built-in `GITHUB_TOKEN` with `contents: write` to publish assets. Pages alone
-   uses `pages: write` and `id-token: write`; PR builds do not receive these
-   grants.
+| # | Where | Do |
+|---|---|---|
+| 1 | Settings → Actions → General | Enable Actions; read-only default token; no PAT/secret needed |
+| 1a | Org policy | Allow `contents: write`, `pages: write`, `id-token: write`; fork PRs may need approval |
+| 2 | Ruleset on `main` | Require review plus reported Go CI quality, native, Darwin, S3 check names |
+| 2a | — | Don't require scale or the path-filtered docs check (unrelated PRs hang) |
+| 3 | Settings → Pages | Source **GitHub Actions**; don't commit `docs/public/`. Not enabled automatically: without it the first publishing run fails (PR builds don't) |
+| 4 | Environments → **github-pages** | **Selected branches and tags**: `main` only; optional reviewers |
+| 5 | Actions → **Documentation** | Run on `main`, check the URL; other branches only build |
+| 6 | Tag ruleset | Only trusted maintainers create release tags; review workflow changes. The release job's `GITHUB_TOKEN` gets `contents: write`; Pages gets `pages: write` + `id-token: write`; PR builds get neither |
 
 ### Publish a version
 
-Update `CHANGELOG.md` and review the intended release commit on `main` before
-creating a tag. Tags must be `vMAJOR.MINOR.PATCH`, optionally followed by a
-hyphenated prerelease, for example `v0.1.0` or `v0.1.0-rc.1`. Build metadata
-suffixes such as `+build.1` are not supported. For example:
+Update `CHANGELOG.md`, review `main`, then:
 
 ```bash
 git switch main
@@ -257,29 +162,18 @@ git tag -a v0.1.0 -m "Release v0.1.0"
 git push origin v0.1.0
 ```
 
-`release.yml` validates the tag and calls the full reusable Go CI at that
-tagged revision before packaging. It produces:
+Tags: `vMAJOR.MINOR.PATCH` (`v0.1.0`), optional hyphenated prerelease (`v0.1.0-rc.1`); no `+build.1` metadata.
 
-- `valet_<tag>_linux_amd64.tar.gz`
-- `valet_<tag>_linux_arm64.tar.gz`
+`release.yml` validates the tag, runs full Go CI, creates a draft, uploads assets, then publishes via `GITHUB_TOKEN` (no PAT):
+
+- `valet_<tag>_linux_amd64.tar.gz`, `valet_<tag>_linux_arm64.tar.gz`
+- `valet_<tag>_darwin_amd64.tar.gz`, `valet_<tag>_darwin_arm64.tar.gz`
 - `valet_<tag>_windows_amd64.zip`
-- `valet_<tag>_darwin_amd64.tar.gz`
-- `valet_<tag>_darwin_arm64.tar.gz`
-- `checksums.txt`, containing the SHA-256 of each archive.
+- `pipeline.schema.json`: the pipeline JSON Schema for that version
+- `checksums.txt`: SHA-256 per asset (not a signature or attestation)
 
-Each archive contains the executable, `README.md`, `CHANGELOG.md`, `SECURITY.md`
-and the project's MIT `LICENSE`. Third-party dependencies retain their respective
-licenses. See the [installation guide](../../getting-started/installation/)
-for download and checksum verification instructions. Checksums are not
-signatures or attestations.
+Archives hold the executable, `README.md`, `CHANGELOG.md`, `SECURITY.md`, MIT `LICENSE`; dependencies keep their own licenses. Verify downloads: [installation guide](../../getting-started/installation/).
 
-The workflow creates a draft release, uploads all assets and only then
-publishes it. A hyphenated version is marked as a prerelease and never marked
-as latest; stable versions are published as latest. Publishing uses only the
-workflow's `GITHUB_TOKEN`, not a PAT.
-
-An existing release, including a draft, causes the workflow to refuse to
-overwrite it. If a run fails after draft creation, inspect the draft and its
-assets, delete that failed draft if it is safe to do so, then rerun the
-workflow for the same unchanged tag. Never move or reuse an already published
-version tag; publish a new version for corrections.
+- Prerelease tags never become latest; stable ones do.
+- Existing release or draft: refused. Failed draft: inspect, delete if safe, rerun the same tag.
+- Never move or reuse a published tag; release a new version.
