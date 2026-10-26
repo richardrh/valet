@@ -96,17 +96,17 @@ GX also reads files directly
 Choose Valet for a standalone file-validation gate, not a hosted platform.
 
 ### Measured deployment footprint
-Valet has a small deployment footprint and no external dependencies to run its core.
+Valet is one self-contained executable. It does not need Python or any other
+runtime; GX Core needs a Python environment.
 
-| Linux amd64 payload                                  |        Valet | GX Core + pandas |
-|------------------------------------------------------|-------------:|-----------------:|
-| Compressed application download, excluding Python    | **12.8 MiB** |         76.4 MiB |
-| Installed application/dependencies, excluding Python | **42.5 MiB** |        248.1 MiB |
-| Installed total including Python                     | **42.5 MiB** |        324.7 MiB |
-| Python distributions                                 |     **None** |               36 |
+| Linux amd64                   |                         Valet |                         GX Core + pandas |
+|-------------------------------|------------------------------:|-----------------------------------------:|
+| Download                      | **12.8 MiB** (one `.tar.gz`)  |    76.4 MiB of packages, plus Python     |
+| Installed on disk             | **42.6 MiB** (one executable) | 248.1 MiB of packages + 76.6 MiB Python = 324.7 MiB |
+| Python required               |                        **No** |             Yes (36 Python distributions) |
 
-Measured versions: Valet `v0.1.0-rc.1`; GX `1.24.0`/pandas `3.0.6`; Python
-`3.12.15`.
+Measured versions: GX `1.24.0`/pandas `3.0.6` on Python `3.12.15`; Valet built
+from this repository with the release flags (`-trimpath -ldflags="-s -w"`).
 
 
 ## Install

@@ -10,8 +10,8 @@ next: getting-started/quickstart
 
 Download an archive and `checksums.txt` from
 [GitHub Releases](https://github.com/richardrh/valet/releases).
-Replace `<tag>` with the full version tag. The initial release candidate is
-`v0.1.0-rc.1`; prereleases are not marked as the latest stable release.
+Replace `<tag>` with the full version tag of a published release, for example
+`v0.1.0-rc.2`. Prereleases are not marked as the latest stable release.
 
 | Platform | Archive |
 | --- | --- |
@@ -92,8 +92,8 @@ With Go 1.27.3 or later, install without cloning the repository:
 go install github.com/richardrh/valet/cmd/valet@latest
 ```
 
-To pin the initial release candidate, use
-`go install github.com/richardrh/valet/cmd/valet@v0.1.0-rc.1`.
+To pin a release, use its tag, for example
+`go install github.com/richardrh/valet/cmd/valet@v0.1.0-rc.2`.
 Go places the executable in `GOBIN`, or `$(go env GOPATH)/bin` when `GOBIN` is
 unset; add that directory to your `PATH`. This is a source build and currently
 reports `dev` with `--version`; downloaded release binaries are version-stamped.
