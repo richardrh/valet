@@ -122,22 +122,19 @@ Workflows in `.github/workflows/` use Go from `go.mod` (1.27.3); don't lower it 
 
 ### CI contract
 
-| Job / area | What runs |
-|---|---|
-| `go.yml` | PRs, pushes to `main`, manual dispatch, release calls; not other branch pushes or tag pushes |
-| `changes` | Docs-only PRs (`docs/content`, layouts, Hugo config, engineering docs, `*.md`, `docs.yml`) skip the jobs below |
-| Caching | Each job restores its own Go build/test cache, saved on every `main` commit; the MinIO build is cached by its pinned commit and Go version. Integration runs against a built binary always use `-count=1` |
-| Quality | Modules, format, vet, race tests, `govulncheck` v1.9.0, `actionlint` v1.7.12 |
-| `go-install` | CLI acceptance from isolated `GOBIN`; tags also test `go install github.com/richardrh/valet/cmd/valet@<tag>` |
-| Native | Linux amd64/arm64, Windows amd64 on the release binaries |
-| Darwin | amd64/arm64 cross-built, tests compiled on Linux; not run, signed or notarized |
-| S3-compatible | MinIO `07c3a429bfed` + RustFS 1.0.3; logs `s3-compatibility-minio`/`-rustfs` |
-| AWS | Optional opt-in; not a release gate |
-| Scale | Manual input `run_scale`: 10 GiB and 100 GiB Arrow streams |
-| `docs.yml` | Hugo Extended 0.156.0 (checksum-verified) for docs PRs, `main`, manual |
-| `CI result` | The single required check: passes when every job passed, or was skipped for a docs-only PR |
+`go.yml` runs on PRs, pushes to `main`, manual dispatch and release calls (not other branch or tag pushes). Docs-only PRs (`docs/content`, layouts, Hugo config, engineering docs, `*.md`, `docs.yml`) skip every Go job.
 
-Release publication waits for `go-install` and build/storage gates. `docs.yml` PR builds have `contents: read` only, use the repository's default Pages URL as base URL and never touch Pages (they work before Pages exists; separate concurrency groups can't cancel deploys). Publishing runs only on `main` push/manual and use the Pages base URL (custom domain included).
+| Lane | When | Jobs |
+|---|---|---|
+| PR | Every code PR | `lint`: modules, gofmt, vet, staticcheck, `govulncheck` v1.9.0, `actionlint` v1.7.12 · `test`: `go test -race ./...` · `cli`: release executable + whole integration suite, S3 included, against MinIO `07c3a429bfed` |
+| Full | `main`, releases, manual runs, PRs labelled `full-ci` | adds `native` (Linux arm64, Windows amd64), `darwin` (amd64/arm64 cross-built and tests compiled; not run, signed or notarized), `s3` (MinIO + RustFS 1.0.3, release and race executables; logs `s3-compatibility-*`), `go-install` (isolated `GOBIN`; tags also `go install …@<tag>`) |
+| Manual | Input `run_scale` | 10 GiB and 100 GiB Arrow streams |
+
+- **`CI result`** is the single required check: it passes when every job that had to run passed.
+- **Caching:** each job restores its own Go build, test and staticcheck caches, saved on every `main` commit; the MinIO build is cached by its pinned commit and Go version. Integration runs against a built executable always use `-count=1`.
+- **AWS:** optional opt-in; not a release gate. **`docs.yml`:** Hugo Extended 0.156.0 (checksum-verified) for docs PRs, `main`, manual.
+
+Release publication runs the full lane first. `docs.yml` PR builds have `contents: read` only, use the repository's default Pages URL as base URL and never touch Pages (they work before Pages exists; separate concurrency groups can't cancel deploys). Publishing runs only on `main` push/manual and use the Pages base URL (custom domain included).
 
 ### One-time GitHub setup
 
