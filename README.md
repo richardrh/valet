@@ -1,8 +1,10 @@
-# valet
+# What is Valet
 
-A validation gate for data files before they reach your warehouse. Valet checks
-CSV, Parquet, JSON and NDJSON against a YAML or JSON pipeline; its exit code
-decides whether the file moves on.
+- Data validation tool optimized for low memory and fast performance
+- No python code just JSON and YAML - this also means no arbitrary code execution on the server
+- Single binary written in Go with minimal dependencies
+- Validate CSV, Parquet, JSON, NDJSON in yoru data pipelines
+- Get a queryable report out
 
 ```mermaid
 flowchart LR
