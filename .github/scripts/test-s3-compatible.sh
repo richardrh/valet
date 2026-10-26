@@ -69,16 +69,27 @@ curl --fail --silent --show-error --retry 30 --retry-delay 1 --retry-connrefused
   --retry-all-errors --max-time 5 "$VALET_S3_ENDPOINT$health"
 printf '\nTesting %s (%s) at %s\n' "$backend" "$image" "$VALET_S3_ENDPOINT"
 
-CGO_ENABLED=0 go build -trimpath -o "$work/valet" ./cmd/valet
-CGO_ENABLED=1 go build -race -trimpath -o "$work/valet-race" ./cmd/valet
+# VALET_S3_FLAVORS: release and/or race executables (default both).
+# VALET_S3_SELECTION: go test -run pattern (default: the S3, VM and stdout suites).
+# VALET_RELEASE_BINARY: reuse an already built release executable.
+flavors="${VALET_S3_FLAVORS:-release race}"
+selection="${VALET_S3_SELECTION:-^(TestE2E(14|15|16|17|18)S3|TestVM|TestStdout)}"
+if [[ -n "${VALET_RELEASE_BINARY:-}" ]]; then
+  cp "$VALET_RELEASE_BINARY" "$work/valet"
+else
+  CGO_ENABLED=0 go build -trimpath -o "$work/valet" ./cmd/valet
+fi
+if [[ " $flavors " == *" race "* ]]; then
+  CGO_ENABLED=1 go build -race -trimpath -o "$work/valet-race" ./cmd/valet
+fi
 # The AWS-only E2E-24 is deliberately excluded, not counted as a passing or
 # skipped compatibility case. Every selected test must execute on both servers.
-selection='^(TestE2E(14|15|16|17|18)S3|TestVM|TestStdout)'
-for flavor in release race; do
+for flavor in $flavors; do
   binary="$work/valet"
   if [[ "$flavor" == race ]]; then binary="$work/valet-race"; fi
   VALET_BINARY="$binary" GORACE='halt_on_error=1 atexit_sleep_ms=0' \
-    go test -count=1 -json -tags integration ./integration -run "$selection" -timeout 20m \
+    go test -count=1 -json -tags integration ./integration -run "$selection" \
+      -skip '^TestE2E24S3AWSIsolatedRun$' -timeout 20m \
     | tee "$logs/$flavor.jsonl"
   jq -es '
     any(.[]; .Action == "pass" and .Package != null and .Test == null)
