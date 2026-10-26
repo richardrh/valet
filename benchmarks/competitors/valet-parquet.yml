@@ -1,0 +1,39 @@
+name: Competitor benchmark (Parquet)
+version: "1.0"
+
+input:
+  type: parquet
+  schema:
+    extra_fields: error
+    columns:
+      id: {type: int64}
+      amount: {type: decimal, precision: 18, scale: 2}
+      quantity: {type: int64}
+      status: {type: string}
+
+rules:
+  - code: ID_NOT_NULL
+    level: error
+    column: id
+    checks:
+      - type: not_null
+  - code: AMOUNT_RANGE
+    level: error
+    column: amount
+    checks:
+      - type: valid_range
+        min: 0
+        max: 10000
+  - code: QUANTITY_RANGE
+    level: error
+    column: quantity
+    checks:
+      - type: valid_range
+        min: 1
+        max: 1000
+  - code: STATUS_ALLOWED
+    level: error
+    column: status
+    checks:
+      - type: valid_values
+        values: [OPEN, PAID, CANCELLED]

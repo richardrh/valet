@@ -1,0 +1,67 @@
+<div class="valet-home">
+  <section class="valet-hero">
+    <div class="valet-hero__copy">
+      <div class="valet-eyebrow">What is Valet?</div>
+      <h1>Validate files <span class="valet-gradient-text">before ingestion.</span></h1>
+      <p class="valet-lede">Valet is a command-line data quality gate for file-based pipelines. Check incoming files against your rules, then use its JSON report and exit code to decide whether ingestion proceeds.</p>
+      <div class="valet-actions">
+        <a class="valet-button valet-button--primary" href="{{ "getting-started/quickstart/" | relURL }}">Try the sample&nbsp; →</a>
+        <a class="valet-button" href="{{ "rules/" | relURL }}">Rules cookbook</a>
+        <a class="valet-button" href="{{ "guides/schema/" | relURL }}">Parquet schema checks</a>
+      </div>
+      <div class="valet-microcopy">
+        <span>One CLI binary</span>
+        <span>JSON + exit codes</span>
+        <span>Local + S3-compatible</span>
+      </div>
+    </div>
+
+    <div class="valet-terminal" aria-label="Bundled CSV validation example, JSON report excerpt and exit code">
+      <div class="valet-terminal__bar"><i></i><i></i><i></i><span>bundled sample · JSON excerpt</span></div>
+      <div class="valet-terminal__body">
+        <div class="valet-terminal__line"><span class="valet-terminal__prompt">$</span> valet validate \</div>
+        <div class="valet-terminal__line">&nbsp;&nbsp;<span class="valet-terminal__flag">-p</span> examples/pipeline.yml \</div>
+        <div class="valet-terminal__line">&nbsp;&nbsp;<span class="valet-terminal__flag">-i</span> examples/sample.csv</div>
+        <div class="valet-terminal__line valet-terminal__muted">"validation": "fail"</div>
+        <div class="valet-terminal__line valet-terminal__muted">"rule_counts": { "RECORD_ID_REQUIRED": 1 }</div>
+        <div class="valet-result">
+          <div><strong>4</strong><span>rows checked</span></div>
+          <div><strong>3</strong><span>rows passed</span></div>
+          <div><strong>Exit 1</strong><span>failed checks</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="valet-format-strip">
+    <span>Supported</span>
+    <div class="valet-formats"><b>CSV</b><b>JSON</b><b>NDJSON</b><b>Parquet</b><b>S3</b></div>
+  </div>
+
+  <section class="valet-section">
+    <div class="valet-section__header">
+      <div><span class="valet-kicker">Why Valet?</span><h2>Make data quality a pipeline step.</h2></div>
+      <p>A readable file can still have missing IDs, duplicate keys, invalid values or an unexpected schema. Check those requirements at the handoff, before your lakehouse, warehouse or downstream job has to deal with them.</p>
+    </div>
+
+    <div class="valet-feature-grid">
+      <article class="valet-feature"><span class="valet-feature__number">01</span><h3>Check more than the file format</h3><p>Validate required values, ranges, keys, references, column relationships and dataset totals against declared rules.</p></article>
+      <article class="valet-feature"><span class="valet-feature__number">02</span><h3>Keep rules with your pipeline</h3><p>Describe checks in YAML or JSON. Version and reuse the same configuration instead of maintaining a validation script for each input.</p></article>
+      <article class="valet-feature"><span class="valet-feature__number">03</span><h3>Give the caller a clear result</h3><p>Get an aggregate JSON report on stdout and use the exit code as your gate. No output files are created unless requested.</p></article>
+      <article class="valet-feature"><span class="valet-feature__number">04</span><h3>Investigate failures when needed</h3><p>Explicitly request row-level issues and Parquet or CSV outputs, with provenance connecting failures to their source rows.</p></article>
+      <article class="valet-feature"><span class="valet-feature__number">05</span><h3>Run without another service</h3><p>Use one self-contained CLI for local or S3-compatible files. Streaming execution shares a managed-memory budget.</p></article>
+      <article class="valet-feature"><span class="valet-feature__number">06</span><h3>Inspect a Parquet schema separately</h3><p>Only need column names and types? Use the metadata-only schema command; its report makes clear that values were not checked.</p></article>
+    </div>
+  </section>
+
+  <section class="valet-stats" aria-label="Where Valet fits in your pipeline">
+    <div class="valet-stat"><strong>Receive a file</strong><span>local data or an S3-compatible object</span></div>
+    <div class="valet-stat"><strong>Run Valet</strong><span>check rules; return JSON and an exit code</span></div>
+    <div class="valet-stat"><strong>Gate ingestion</strong><span>your caller decides whether to upload</span></div>
+  </section>
+
+  <section class="valet-cta">
+    <div><h2>Your pipeline still owns ingestion.</h2><p>Valet is not a lakehouse uploader, scheduler or storage platform. Keep your existing tools and put a validation gate before the next step. Use error-level rules for checks that must block ingestion; warnings alone do not block.</p></div>
+    <a class="valet-button" href="{{ "getting-started/quickstart/" | relURL }}">Open the quickstart&nbsp; →</a>
+  </section>
+</div>

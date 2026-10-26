@@ -1,0 +1,1333 @@
+{
+  "$defs": {
+    "check": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A row-scope check.",
+          "properties": {
+            "columns": {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "type": {
+              "const": "all_equal"
+            },
+            "value": {
+              "$ref": "#/$defs/scalar"
+            }
+          },
+          "required": [
+            "type",
+            "columns"
+          ],
+          "title": "all_equal",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A row-scope check.",
+          "properties": {
+            "column": {
+              "type": "string"
+            },
+            "operator": {
+              "enum": [
+                "==",
+                "!=",
+                "\u003c",
+                "\u003c=",
+                "\u003e",
+                "\u003e="
+              ],
+              "type": "string"
+            },
+            "other_column": {
+              "type": "string"
+            },
+            "type": {
+              "const": "compare_columns"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "compare_columns",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A row-scope check.",
+          "properties": {
+            "column": {
+              "type": "string"
+            },
+            "columns": {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "format": {
+              "type": "string"
+            },
+            "formats": {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "type": {
+              "const": "date_format"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "date_format",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A row-scope check.",
+          "properties": {
+            "column": {
+              "type": "string"
+            },
+            "columns": {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "type": {
+              "const": "equals"
+            },
+            "value": {
+              "$ref": "#/$defs/scalar"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "equals",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A row-scope check.",
+          "properties": {
+            "columns": {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "type": {
+              "const": "has_null_keys"
+            }
+          },
+          "required": [
+            "type",
+            "columns"
+          ],
+          "title": "has_null_keys",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A row-scope check.",
+          "properties": {
+            "column": {
+              "type": "string"
+            },
+            "columns": {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "type": {
+              "const": "is_present"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "is_present",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A global-scope check.",
+          "properties": {
+            "column": {
+              "type": "string"
+            },
+            "columns": {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "type": {
+              "const": "is_unique"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "is_unique",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A global-scope check.",
+          "properties": {
+            "columns": {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "type": {
+              "const": "is_unique_composite"
+            }
+          },
+          "required": [
+            "type",
+            "columns"
+          ],
+          "title": "is_unique_composite",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A row-scope check.",
+          "properties": {
+            "column": {
+              "type": "string"
+            },
+            "columns": {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "pattern": {
+              "type": "string"
+            },
+            "type": {
+              "const": "matches_pattern"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "matches_pattern",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A row-scope check.",
+          "properties": {
+            "column": {
+              "type": "string"
+            },
+            "columns": {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "max_length": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "max_length"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "max_length",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A row-scope check.",
+          "properties": {
+            "column": {
+              "type": "string"
+            },
+            "columns": {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "min_length": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "min_length"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "min_length",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A row-scope check.",
+          "properties": {
+            "column": {
+              "type": "string"
+            },
+            "columns": {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "type": {
+              "const": "not_blank"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "not_blank",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A row-scope check.",
+          "properties": {
+            "column": {
+              "type": "string"
+            },
+            "columns": {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "type": {
+              "const": "not_equals"
+            },
+            "value": {
+              "$ref": "#/$defs/scalar"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "not_equals",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A row-scope check.",
+          "properties": {
+            "column": {
+              "type": "string"
+            },
+            "columns": {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "type": {
+              "const": "not_null"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "not_null",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A reference-scope check.",
+          "properties": {
+            "column": {
+              "type": "string"
+            },
+            "reference_column": {
+              "type": "string"
+            },
+            "reference_file": {
+              "type": "string"
+            },
+            "type": {
+              "const": "referential_integrity"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "referential_integrity",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A reference-scope check.",
+          "properties": {
+            "columns": {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "reference_columns": {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "reference_file": {
+              "type": "string"
+            },
+            "type": {
+              "const": "referential_integrity_composite"
+            }
+          },
+          "required": [
+            "type",
+            "columns"
+          ],
+          "title": "referential_integrity_composite",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A schema-scope check.",
+          "properties": {
+            "columns": {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "type": {
+              "const": "required_columns"
+            }
+          },
+          "required": [
+            "type",
+            "columns"
+          ],
+          "title": "required_columns",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A schema-scope check.",
+          "properties": {
+            "allow_extra_columns": {
+              "type": "boolean"
+            },
+            "columns": {
+              "additionalProperties": {
+                "$ref": "#/$defs/type_name"
+              },
+              "minProperties": 1,
+              "type": "object"
+            },
+            "mode": {
+              "enum": [
+                "strict",
+                "castable"
+              ],
+              "type": "string"
+            },
+            "require_columns": {
+              "type": "boolean"
+            },
+            "type": {
+              "const": "schema_matches"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "schema_matches",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A row-scope check.",
+          "properties": {
+            "column": {
+              "type": "string"
+            },
+            "columns": {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "max": {
+              "type": "string"
+            },
+            "min": {
+              "type": "string"
+            },
+            "timezone": {
+              "type": "string"
+            },
+            "type": {
+              "const": "timestamp_window"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "timestamp_window",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A row-scope check.",
+          "properties": {
+            "column": {
+              "type": "string"
+            },
+            "columns": {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "expected_type": {
+              "$ref": "#/$defs/type_name"
+            },
+            "type": {
+              "const": "type_check"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "type_check",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A row-scope check.",
+          "properties": {
+            "column": {
+              "type": "string"
+            },
+            "columns": {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "length": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "valid_length"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "valid_length",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A row-scope check.",
+          "properties": {
+            "column": {
+              "type": "string"
+            },
+            "columns": {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "exclusive_max": {
+              "type": "boolean"
+            },
+            "exclusive_min": {
+              "type": "boolean"
+            },
+            "max": {
+              "type": [
+                "number",
+                "string"
+              ]
+            },
+            "min": {
+              "type": [
+                "number",
+                "string"
+              ]
+            },
+            "type": {
+              "const": "valid_range"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "valid_range",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A schema-scope check.",
+          "properties": {
+            "reference_column": {
+              "type": "string"
+            },
+            "reference_file": {
+              "type": "string"
+            },
+            "type": {
+              "const": "valid_schema_columns"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "valid_schema_columns",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A row-scope check.",
+          "properties": {
+            "column": {
+              "type": "string"
+            },
+            "columns": {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "type": {
+              "const": "valid_values"
+            },
+            "values": {
+              "items": {
+                "$ref": "#/$defs/scalar"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "valid_values",
+          "type": "object"
+        }
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "all_equal",
+            "compare_columns",
+            "date_format",
+            "equals",
+            "has_null_keys",
+            "is_present",
+            "is_unique",
+            "is_unique_composite",
+            "matches_pattern",
+            "max_length",
+            "min_length",
+            "not_blank",
+            "not_equals",
+            "not_null",
+            "referential_integrity",
+            "referential_integrity_composite",
+            "required_columns",
+            "schema_matches",
+            "timestamp_window",
+            "type_check",
+            "valid_length",
+            "valid_range",
+            "valid_schema_columns",
+            "valid_values"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    "column": {
+      "additionalProperties": false,
+      "properties": {
+        "false_values": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "formats": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "nullable": {
+          "type": "boolean"
+        },
+        "path": {
+          "type": "string"
+        },
+        "precision": {
+          "type": "integer"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "scale": {
+          "type": "integer"
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "trim": {
+          "type": "boolean"
+        },
+        "true_values": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "type": {
+          "$ref": "#/$defs/type_name"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    "condition": {
+      "additionalProperties": false,
+      "properties": {
+        "all": {
+          "items": {
+            "$ref": "#/$defs/condition"
+          },
+          "type": "array"
+        },
+        "any": {
+          "items": {
+            "$ref": "#/$defs/condition"
+          },
+          "type": "array"
+        },
+        "column": {
+          "type": "string"
+        },
+        "not": {
+          "$ref": "#/$defs/condition"
+        },
+        "operator": {
+          "enum": [
+            "eq",
+            "ne",
+            "lt",
+            "le",
+            "gt",
+            "ge",
+            "in",
+            "is_null",
+            "is_present"
+          ],
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/scalar"
+            },
+            {
+              "items": {
+                "$ref": "#/$defs/scalar"
+              },
+              "type": "array"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "datasetrule": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "column": {
+          "type": "string"
+        },
+        "equals": {
+          "type": [
+            "number",
+            "string"
+          ]
+        },
+        "level": {
+          "enum": [
+            "error",
+            "warn"
+          ],
+          "type": "string"
+        },
+        "max": {
+          "type": [
+            "number",
+            "string"
+          ]
+        },
+        "metric": {
+          "enum": [
+            "row_count",
+            "missing_count",
+            "null_count",
+            "blank_count",
+            "conversion_error_count",
+            "missing_fraction",
+            "null_fraction",
+            "blank_fraction",
+            "conversion_error_fraction",
+            "rule_failure_count",
+            "rule_failure_fraction",
+            "sum",
+            "min",
+            "max",
+            "avg"
+          ],
+          "type": "string"
+        },
+        "min": {
+          "type": [
+            "number",
+            "string"
+          ]
+        },
+        "rule_code": {
+          "type": "string"
+        },
+        "tolerance": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "code",
+        "level",
+        "metric"
+      ],
+      "type": "object"
+    },
+    "execution": {
+      "additionalProperties": false,
+      "properties": {
+        "batch_target": {
+          "type": "string"
+        },
+        "max_depth": {
+          "type": "integer"
+        },
+        "max_record_bytes": {
+          "type": "string"
+        },
+        "memory_budget": {
+          "type": "string"
+        },
+        "workers": {
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "input": {
+      "additionalProperties": false,
+      "properties": {
+        "columns": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "delimiter": {
+          "type": "string"
+        },
+        "header": {
+          "type": "boolean"
+        },
+        "infer_schema_length": {
+          "type": "integer"
+        },
+        "mode": {
+          "enum": [
+            "raw_strings",
+            "infer_types"
+          ],
+          "type": "string"
+        },
+        "null_values": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "on_malformed": {
+          "enum": [
+            "abort",
+            "reject"
+          ],
+          "type": "string"
+        },
+        "on_type_error": {
+          "enum": [
+            "row_error",
+            "abort"
+          ],
+          "type": "string"
+        },
+        "parquet": {
+          "$ref": "#/$defs/inputparquet"
+        },
+        "schema": {
+          "$ref": "#/$defs/schema"
+        },
+        "type": {
+          "enum": [
+            "csv",
+            "parquet",
+            "ndjson",
+            "json"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "inputparquet": {
+      "additionalProperties": false,
+      "properties": {
+        "statistics": {
+          "enum": [
+            "off",
+            "trusted"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "output": {
+      "additionalProperties": false,
+      "properties": {
+        "format": {
+          "enum": [
+            "csv",
+            "parquet"
+          ],
+          "type": "string"
+        },
+        "issues": {
+          "enum": [
+            "ndjson"
+          ],
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "all",
+            "failures",
+            "report"
+          ],
+          "type": "string"
+        },
+        "parquet": {
+          "$ref": "#/$defs/outputparquet"
+        },
+        "part_size": {
+          "type": "string"
+        },
+        "s3": {
+          "$ref": "#/$defs/s3"
+        },
+        "uri": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "outputparquet": {
+      "additionalProperties": false,
+      "properties": {
+        "statistics": {
+          "enum": [
+            "none",
+            "bounded"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "rule": {
+      "additionalProperties": false,
+      "properties": {
+        "checks": {
+          "items": {
+            "$ref": "#/$defs/check"
+          },
+          "type": "array"
+        },
+        "code": {
+          "type": "string"
+        },
+        "column": {
+          "type": "string"
+        },
+        "level": {
+          "enum": [
+            "error",
+            "warn"
+          ],
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "when": {
+          "$ref": "#/$defs/condition"
+        }
+      },
+      "required": [
+        "code",
+        "level",
+        "checks"
+      ],
+      "type": "object"
+    },
+    "s3": {
+      "additionalProperties": false,
+      "properties": {
+        "endpoint": {
+          "type": "string"
+        },
+        "kms_key_id": {
+          "type": "string"
+        },
+        "path_style": {
+          "type": "boolean"
+        },
+        "profile": {
+          "type": "string"
+        },
+        "region": {
+          "type": "string"
+        },
+        "sse": {
+          "enum": [
+            "AES256",
+            "aws:kms"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "scalar": {
+      "type": [
+        "string",
+        "number",
+        "boolean",
+        "null"
+      ]
+    },
+    "schema": {
+      "additionalProperties": false,
+      "properties": {
+        "columns": {
+          "additionalProperties": {
+            "$ref": "#/$defs/column"
+          },
+          "type": "object"
+        },
+        "extra_fields": {
+          "enum": [
+            "error",
+            "ignore"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "source": {
+      "additionalProperties": false,
+      "properties": {
+        "filter": {
+          "enum": [
+            "csv",
+            "parquet",
+            "json",
+            "ndjson"
+          ],
+          "type": "string"
+        },
+        "prefix": {
+          "type": "string"
+        },
+        "recursive": {
+          "type": "boolean"
+        },
+        "s3": {
+          "$ref": "#/$defs/s3"
+        },
+        "uris": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "stat": {
+      "additionalProperties": false,
+      "properties": {
+        "aggregate": {
+          "enum": [
+            "sum",
+            "count",
+            "avg"
+          ],
+          "type": "string"
+        },
+        "code": {
+          "type": "string"
+        },
+        "column": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "column",
+        "aggregate"
+      ],
+      "type": "object"
+    },
+    "transform": {
+      "additionalProperties": false,
+      "properties": {
+        "exclude_keys": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "mapping": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "mapping_file": {
+          "type": "string"
+        },
+        "schema_file": {
+          "type": "string"
+        },
+        "source_col": {
+          "type": "integer"
+        },
+        "source_key": {
+          "type": "string"
+        },
+        "target_col": {
+          "type": "integer"
+        },
+        "type": {
+          "enum": [
+            "rename_columns",
+            "schema_rename"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    "type_name": {
+      "anyOf": [
+        {
+          "enum": [
+            "binary",
+            "bool",
+            "boolean",
+            "bytes",
+            "date",
+            "date32",
+            "date64",
+            "datetime",
+            "decimal",
+            "decimal128",
+            "double",
+            "float",
+            "float32",
+            "float64",
+            "int",
+            "int16",
+            "int32",
+            "int64",
+            "int8",
+            "integer",
+            "large_binary",
+            "large_string",
+            "large_utf8",
+            "null",
+            "str",
+            "string",
+            "timestamp",
+            "uint16",
+            "uint32",
+            "uint64",
+            "uint8",
+            "utf8"
+          ]
+        },
+        {
+          "pattern": "^(?:[bB][iI][nN][aA][rR][yY]|[bB][oO][oO][lL]|[bB][oO][oO][lL][eE][aA][nN]|[bB][yY][tT][eE][sS]|[dD][aA][tT][eE]|[dD][aA][tT][eE]32|[dD][aA][tT][eE]64|[dD][aA][tT][eE][tT][iI][mM][eE]|[dD][eE][cC][iI][mM][aA][lL]|[dD][eE][cC][iI][mM][aA][lL]128|[dD][oO][uU][bB][lL][eE]|[fF][lL][oO][aA][tT]|[fF][lL][oO][aA][tT]32|[fF][lL][oO][aA][tT]64|[iI][nN][tT]|[iI][nN][tT]16|[iI][nN][tT]32|[iI][nN][tT]64|[iI][nN][tT]8|[iI][nN][tT][eE][gG][eE][rR]|[lL][aA][rR][gG][eE]_[bB][iI][nN][aA][rR][yY]|[lL][aA][rR][gG][eE]_[sS][tT][rR][iI][nN][gG]|[lL][aA][rR][gG][eE]_[uU][tT][fF]8|[nN][uU][lL][lL]|[sS][tT][rR]|[sS][tT][rR][iI][nN][gG]|[tT][iI][mM][eE][sS][tT][aA][mM][pP]|[uU][iI][nN][tT]16|[uU][iI][nN][tT]32|[uU][iI][nN][tT]64|[uU][iI][nN][tT]8|[uU][tT][fF]8)$"
+        }
+      ],
+      "description": "Type name, any letter case. Sized names: int8-int64, uint8-uint64, float32, float64 or double. Bare Python names: int = int64 and float = float64; in C, Arrow and Parquet float is 32-bit, so write float32 for those columns. Also str/string, bytes/binary, bool, decimal (with precision and scale), date and datetime/timestamp.",
+      "type": "string"
+    }
+  },
+  "$id": "https://richardrh.github.io/valet/schema/v1/pipeline.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A Valet validation pipeline (YAML or JSON). See https://richardrh.github.io/valet/guides/configuration/.",
+  "properties": {
+    "$schema": {
+      "description": "URL of this JSON Schema, for editors; Valet ignores it.",
+      "type": "string"
+    },
+    "config_version": {
+      "enum": [
+        0,
+        1
+      ],
+      "type": "integer"
+    },
+    "context": {
+      "description": "Values substituted into rule messages.",
+      "type": "object"
+    },
+    "dataset_rules": {
+      "description": "Assertions over whole-dataset metrics.",
+      "items": {
+        "$ref": "#/$defs/datasetrule"
+      },
+      "type": "array"
+    },
+    "execution": {
+      "$ref": "#/$defs/execution",
+      "description": "Managed memory budget, batch size, record limit and workers."
+    },
+    "input": {
+      "$ref": "#/$defs/input",
+      "description": "How input files are read: format, mode and optional declared schema."
+    },
+    "name": {
+      "type": "string"
+    },
+    "output": {
+      "$ref": "#/$defs/output",
+      "description": "Optional artifact publication; without uri, only the stdout summary is produced."
+    },
+    "rules": {
+      "description": "Row and schema rules, evaluated in order.",
+      "items": {
+        "$ref": "#/$defs/rule"
+      },
+      "type": "array"
+    },
+    "source": {
+      "$ref": "#/$defs/source",
+      "description": "Where input comes from when -i is not given: URIs or a prefix."
+    },
+    "stats": {
+      "description": "Aggregates reported in the summary.",
+      "items": {
+        "$ref": "#/$defs/stat"
+      },
+      "type": "array"
+    },
+    "transforms": {
+      "description": "Column renames applied before rules bind.",
+      "items": {
+        "$ref": "#/$defs/transform"
+      },
+      "type": "array"
+    },
+    "version": {
+      "type": "string"
+    }
+  },
+  "title": "Valet pipeline",
+  "type": "object"
+}

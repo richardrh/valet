@@ -1,0 +1,30 @@
+# {{ site.Title }} documentation
+
+> {{ site.Params.description }}
+
+Site: {{ site.BaseURL }}
+Pipeline JSON Schema: {{ "schema/v1/pipeline.schema.json" | absURL }}
+
+Every documentation page follows in navigation order. Each starts with a
+level-one heading and its source URL.
+{{- range site.Home.Pages.ByWeight }}
+{{- if ne .Params.llms false }}
+{{- template "llms-full-page" . }}
+{{- if .IsSection }}
+{{- range .RegularPages.ByWeight }}
+{{- if ne .Params.llms false }}{{ template "llms-full-page" . }}{{ end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{- define "llms-full-page" }}
+
+---
+
+# {{ .Title }}
+
+Source: {{ .Permalink }}
+
+{{ .RawContent | replaceRE `(?m)^[ \t]*\{\{[<%].*[>%]\}\}[ \t]*\n?` "" | strings.TrimSpace }}
+{{ end }}

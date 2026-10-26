@@ -1,0 +1,41 @@
+{{- /* Hextra v0.13.0 llms.txt, plus links to the single-file docs and the pipeline JSON Schema. */ -}}
+# {{ .Site.Title }}
+
+> {{ .Site.Params.description | default "" }}
+
+## Machine-readable
+- [All documentation as one Markdown file]({{ "llms-full.txt" | absURL }}): every page below, in navigation order
+- [Pipeline JSON Schema]({{ "schema/v1/pipeline.schema.json" | absURL }}): JSON Schema (draft 2020-12) for YAML and JSON pipeline documents
+- Markdown copy of every page: `…/guides/operations/` is also at `…/guides/operations.md`, and a section such as `…/guides/` at `…/guides/index.md`
+
+{{ range where site.Sections "Params.llms" "ne" false }}
+{{- template "llms-section-tree" dict "context" . "level" 2 }}
+{{ end }}
+
+{{- $rootPages := where (where site.RegularPages "Section" "") "Params.llms" "ne" false }}
+{{- if $rootPages }}
+## Root Pages
+{{- range $rootPages }}
+- [{{ .Title }}]({{ .Permalink }}): {{ .Summary | plainify | truncate 100 | htmlUnescape | strings.TrimSpace }}{{ if .Date }} - Published {{ .Date.Format "2006-01-02" }}{{ end }}
+{{- end }}
+{{- end }}
+
+---
+Generated on {{ now.Format "2006-01-02 15:04:05 UTC" }}
+Site: {{ .Site.BaseURL }}
+
+{{- define "llms-section-tree" -}}
+{{- $context := .context -}}
+{{- $level := .level | default 2 -}}
+{{- $headerHashes := strings.Repeat $level "#" -}}
+{{- "\n" -}}
+{{ $headerHashes }} {{ $context.Title }}
+
+{{- range where $context.RegularPages "Params.llms" "ne" false }}
+- [{{ .Title }}]({{ .Permalink }}): {{ .Summary | plainify | truncate 100 | htmlUnescape | strings.TrimSpace }}{{ if .Date }} - Published {{ .Date.Format "2006-01-02" }}{{ end }}
+{{- end }}
+
+{{- range where $context.Sections "Params.llms" "ne" false }}
+{{ template "llms-section-tree" dict "context" . "level" (add $level 1) }}
+{{- end }}
+{{- end -}}

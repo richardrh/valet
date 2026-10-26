@@ -1,0 +1,22 @@
+name: Parquet schema and amount checks
+version: "1.0"
+
+input:
+  type: parquet
+  schema:
+    # Ignore existing provenance columns when inspecting/revalidating Valet output.
+    # Use error when these three columns must be the complete input schema.
+    extra_fields: ignore
+    columns:
+      record_id: {type: string, required: true}
+      location: {type: string, required: true}
+      amount: {type: int64, required: true}
+
+rules:
+  - code: AMOUNT_NONNEGATIVE
+    name: Amount must not be negative
+    level: error
+    column: amount
+    checks:
+      - type: valid_range
+        min: 0

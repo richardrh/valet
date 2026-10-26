@@ -1,0 +1,3 @@
+# The published JSON Schema is generated and compared byte-for-byte, and is
+# served and released as-is; keep it LF on every platform.
+docs/static/schema/** text eol=lf

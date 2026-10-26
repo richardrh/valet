@@ -1,0 +1,467 @@
+name: "Shared OED Validation Rules"
+version: "1.0"
+
+rules:
+  # --- Valid Schema Columns (Schema Level) ---
+  # Validates that all columns in the input file are valid OED columns
+  - code: VALID_OED_COLUMNS
+    name: Valid OED Columns Present
+    checks:
+      - type: valid_schema_columns
+        reference_file: oed_mapping_ukeu.csv
+        reference_column: OED IMPORT FIELD
+    level: error
+    message: "Input contains columns that are not valid OED columns"
+
+  # --- Required Columns (Schema Level) ---
+  # Validates that required OED columns are present in the input file
+  - code: REQUIRED_OED_COLUMNS
+    name: Required OED Columns Present
+    checks:
+      - type: required_columns
+        columns:
+          - AccNumber
+          - BranchName
+          - PolExpiryDate
+          - PolInceptionDate
+          - AccUserDef1
+          - AccUserDef2
+          - AccUserDef3
+          - AccUserDef4
+          - AccUserDef5
+          - StreetAddress
+          - City
+          - CountryCode
+          - Latitude
+          - Longitude
+          - BuildingTIV
+          - ContentsTIV
+          - BITIV
+          - OtherTIV
+          - EQ_Flag
+          - YearBuilt
+          - FL_Flag
+          - WS_Flag
+          - FR_Flag
+          - LocParticipation
+          - PolNetPremium
+          - PolGrossPremium
+    level: error
+    message: "Required OED columns are missing from the input file"
+
+  # --- Not Null Checks (Key Fields) ---
+  - code: NOT_NULL_KEY_FIELDS
+    name: Key Fields Not Null
+    checks:
+      - type: not_null
+        columns:
+          - AccNumber
+          - BranchName
+          - PolExpiryDate
+          - PolInceptionDate
+          - LocParticipation
+    level: error
+    message: "Key fields must not be null"
+
+  # --- TIV and Premium Columns Numeric ---
+  - code: TYPE_TIV_COLUMNS
+    name: TIV and Premium Columns Numeric
+    checks:
+      - type: type_check
+        expected_type: float
+        columns:
+          - BuildingTIV
+          - ContentsTIV
+          - BITIV
+          - PolGrossPremium
+    level: error
+    message: "TIV and premium columns must be valid numbers"
+
+  # --- Latitude/Longitude Validation ---
+  - code: VALID_LATITUDE
+    name: Valid Latitude
+    column: Latitude
+    checks:
+      - type: valid_range
+        min: -90
+        max: 90
+    level: error
+    message: "Latitude must be between -90 and 90"
+
+  - code: VALID_LONGITUDE
+    name: Valid Longitude
+    column: Longitude
+    checks:
+      - type: valid_range
+        min: -180
+        max: 180
+    level: error
+    message: "Longitude must be between -180 and 180"
+
+  # --- Country Code Validation (ISO 3166-1 alpha-2) ---
+  - code: VALID_COUNTRY_CODE
+    name: Country Code ISO2 Valid
+    column: CountryCode
+    checks:
+      - type: referential_integrity
+        reference_file: country_ref.csv
+        reference_column: CountryCode
+    level: warn
+    message: "CountryCode must be a valid ISO 3166-1 alpha-2 code"
+
+  # --- Currency Validation (ISO 4217) ---
+  - code: VALID_CURRENCY
+    name: Valid Currency Code
+    column: LocCurrency
+    checks:
+      - type: referential_integrity
+        reference_file: fx_rates.csv
+        reference_column: CurrencyCode
+    level: warn
+    message: "LocCurrency must be a valid ISO 4217 currency code"
+
+  # --- Hazard Flags (Boolean) ---
+  - code: VALID_HAZARD_FLAGS
+    name: Hazard Flags Boolean Type
+    checks:
+      - type: type_check
+        expected_type: bool
+        columns:
+          - EQ_Flag
+          - FL_Flag
+          - WS_Flag
+          - FR_Flag
+    level: error
+    message: "Hazard flags must be boolean (true/false)"
+
+  # --- Premium Non-Negative ---
+  - code: POSITIVE_GWP
+    name: Gross Premium Non-Negative
+    column: PolGrossPremium
+    checks:
+      - type: valid_range
+        min: 0
+    level: warn
+    message: "Gross premium should be non-negative"
+    #
+  # --- Premium warning checks ---
+  - code: REASONABLE_GWP
+    name: Gross Premium Is Reasonable
+    column: PolGrossPremium
+    checks:
+      - type: valid_range
+        min: 0
+        max: 1_000_000
+    level: warn
+    message: "Gross premium should be less than 1m"
+
+  # --- Participation Range ---
+  - code: VALID_PARTICIPATION
+    name: Participation Range
+    column: LocParticipation
+    checks:
+      - type: valid_range
+        min: 0
+        max: 100
+    level: warn
+    message: "Participation should be between 0 and 100"
+
+  # --- Year Built Range ---
+  - code: VALID_YEAR_BUILT
+    name: Year Built Reasonable
+    column: YearBuilt
+    checks:
+      - type: valid_range
+        min: 1800
+        max: 2030
+    level: warn
+    message: "Year built should be between 1800 and 2030"
+
+  # --- Year Built Range ---
+  - code: VALID_YEAR_BUILT_STRICT
+    name: Year Built Stricter Check
+    column: YearBuilt
+    checks:
+      - type: valid_range
+        min: 1910
+        max: 2030
+    level: warn
+    message: "Year built should be between 1910 and 2030"
+
+  # --- LOB Mapping Validation ---
+  - code: VALID_LOB_MAPPING
+    name: Valid LOB Mapping
+    checks:
+      - type: referential_integrity_composite
+        reference_file: LOB_MAPPING_GC.csv
+        columns:
+          - AccUserDef2
+          - AccUserDef3
+          - AccUserDef4
+          - AccUserDef5
+          - BranchName
+          - LocUserDef1
+    level: warn
+    message: "LOB key fields should map to a valid LOB in reference data"
+
+  # --- Null Island (lat=0, lon=0 is in the ocean off West Africa — geocoding failure) ---
+  - code: NULL_ISLAND
+    name: Null Island Coordinates
+    checks:
+      - type: equals
+        columns:
+          - Latitude
+          - Longitude
+        value: 0
+    level: warn
+    message: "Lat or Lon is 0 — likely a geocoding failure (null island)"
+
+  # --- Zero TIV (a zero TIV should be null if not covered, not 0) ---
+  - code: ZERO_BUILDING_TIV
+    name: Zero BUILDING TIV Value
+    checks:
+      - type: equals
+        columns:
+          - BuildingTIV
+        value: 0
+    level: warn
+    message: "Building TIV warning if zero"
+
+  - code: REASONAVLE_TIV_RANGE
+    name: Reasonable TIV
+    column: BuildingTIV
+    checks:
+      - type: valid_range
+        min: 0
+        max: 50_000_000
+    level: warn
+    message: "Building TIV warning if not between 0 and 50m"
+
+  # --- Deductible Exceeds TIV ---
+  - code: DED_EXCEEDS_TIV
+    name: Deductible Exceeds TIV
+    checks:
+      - type: compare_columns
+        column: LocDed1Building
+        other_column: BuildingTIV
+        operator: "<="
+      - type: compare_columns
+        column: LocDed3Contents
+        other_column: ContentsTIV
+        operator: "<="
+      - type: compare_columns
+        column: LocDed4BI
+        other_column: BITIV
+        operator: "<="
+    level: error
+    message: "Deductible must not exceed the corresponding TIV"
+
+  # --- Zero Hazard Limits (if set, a limit of 0 is likely wrong) ---
+  - code: ZERO_HAZARD_LIMITS
+    name: Zero Hazard Limits
+    checks:
+      - type: equals
+        columns:
+          - EQ_Limit
+          - FL_Limit
+          - WS_Limit
+          - FR_Limit
+        value: 0
+    level: warn
+    message: "Hazard limit is zero — use null if limit is not applicable"
+
+  # --- Zero Deductibles (if set, a deductible of 0 is likely wrong) ---
+  - code: ZERO_DEDUCTIBLES
+    name: Zero Deductible Values
+    checks:
+      - type: all_equal
+        columns:
+          - LocDed1Building
+          - LocDed3Contents
+          - LocDed4BI
+          - LocDed6All
+          - EQ_Deductible
+          - FL_Deductible
+          - WS_Deductible
+          - FR_Deductible
+        value: 0
+    level: warn
+    message: "Deductible is zero — use null if no deductible applies"
+
+  # --- Unique Policy Numbers ---
+  - code: UNIQUE_POLICY_REF
+    name: Policy Reference Unique
+    column: AccNumber
+    checks:
+      - type: is_unique
+    level: warn
+    message: "AccNumber is not unique - may be legit"
+
+  # --- Composite Duplicate Detection ---
+  # Flags rows where the combination of AccNumber + LocNumber + UPRN + BuildingTIV is duplicated.
+  # Columns are configurable — adjust for your dataset's natural composite key.
+  - code: UNIQUE_COMPOSITE_KEY
+    name: Composite Location Key Unique
+    checks:
+      - type: is_unique_composite
+        columns:
+          - AccNumber
+          - LocNumber
+          - UPRN
+          - BuildingTIV
+    level: warn
+    message: "Duplicate location detected — AccNumber + LocNumber + UPRN + BuildingTIV combination is not unique"
+
+stats:
+  # --- Row Count ---
+  - code: ROW_COUNT
+    name: Total Row Count
+    column: AccNumber
+    aggregate: count
+
+  # --- TIV: Sum ---
+  - code: TOTAL_BUILDINGS_TIV
+    name: Total Buildings TIV
+    column: BuildingTIV
+    aggregate: sum
+
+  - code: TOTAL_CONTENTS_TIV
+    name: Total Contents TIV
+    column: ContentsTIV
+    aggregate: sum
+
+  - code: TOTAL_BI_TIV
+    name: Total BI TIV
+    column: BITIV
+    aggregate: sum
+
+  - code: TOTAL_OTHER_TIV
+    name: Total Other TIV
+    column: OtherTIV
+    aggregate: sum
+
+  # --- TIV: Average ---
+  - code: AVG_BUILDINGS_TIV
+    name: Average Buildings TIV
+    column: BuildingTIV
+    aggregate: avg
+
+  - code: AVG_CONTENTS_TIV
+    name: Average Contents TIV
+    column: ContentsTIV
+    aggregate: avg
+
+  - code: AVG_BI_TIV
+    name: Average BI TIV
+    column: BITIV
+    aggregate: avg
+
+  # --- Premium ---
+  - code: TOTAL_GWP
+    name: Total Gross Premium
+    column: PolGrossPremium
+    aggregate: sum
+
+  - code: AVG_GWP
+    name: Average Gross Premium
+    column: PolGrossPremium
+    aggregate: avg
+
+  # --- Hazard Limits: Sum ---
+  - code: TOTAL_EQ_LIMIT
+    name: Total EQ Limit
+    column: EQ_Limit
+    aggregate: sum
+
+  - code: TOTAL_FL_LIMIT
+    name: Total FL Limit
+    column: FL_Limit
+    aggregate: sum
+
+  - code: TOTAL_WS_LIMIT
+    name: Total WS Limit
+    column: WS_Limit
+    aggregate: sum
+
+  - code: TOTAL_FR_LIMIT
+    name: Total FR Limit
+    column: FR_Limit
+    aggregate: sum
+
+  # --- Hazard Limits: Average ---
+  - code: AVG_EQ_LIMIT
+    name: Average EQ Limit
+    column: EQ_Limit
+    aggregate: avg
+
+  - code: AVG_FL_LIMIT
+    name: Average FL Limit
+    column: FL_Limit
+    aggregate: avg
+
+  - code: AVG_WS_LIMIT
+    name: Average WS Limit
+    column: WS_Limit
+    aggregate: avg
+
+  - code: AVG_FR_LIMIT
+    name: Average FR Limit
+    column: FR_Limit
+    aggregate: avg
+
+  # --- Deductibles: Sum ---
+  - code: TOTAL_EQ_DED
+    name: Total EQ Deductible
+    column: EQ_Deductible
+    aggregate: sum
+
+  - code: TOTAL_FL_DED
+    name: Total FL Deductible
+    column: FL_Deductible
+    aggregate: sum
+
+  - code: TOTAL_WS_DED
+    name: Total WS Deductible
+    column: WS_Deductible
+    aggregate: sum
+
+  - code: TOTAL_FR_DED
+    name: Total FR Deductible
+    column: FR_Deductible
+    aggregate: sum
+
+  - code: TOTAL_LOC_DED_BUILDING
+    name: Total Location Buildings Deductible
+    column: LocDed1Building
+    aggregate: sum
+
+  - code: TOTAL_LOC_DED_CONTENTS
+    name: Total Location Contents Deductible
+    column: LocDed3Contents
+    aggregate: sum
+
+  - code: TOTAL_LOC_DED_BI
+    name: Total Location BI Deductible
+    column: LocDed4BI
+    aggregate: sum
+
+  # --- Deductibles: Average ---
+  - code: AVG_EQ_DED
+    name: Average EQ Deductible
+    column: EQ_Deductible
+    aggregate: avg
+
+  - code: AVG_FL_DED
+    name: Average FL Deductible
+    column: FL_Deductible
+    aggregate: avg
+
+  - code: AVG_WS_DED
+    name: Average WS Deductible
+    column: WS_Deductible
+    aggregate: avg
+
+  - code: AVG_FR_DED
+    name: Average FR Deductible
+    column: FR_Deductible
+    aggregate: avg
