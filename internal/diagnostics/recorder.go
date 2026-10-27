@@ -220,12 +220,6 @@ func AddCounter(ctx context.Context, counter Counter, bytes uint64) {
 	r.add(&r.counters[counter], bytes)
 }
 
-func SetResultBytesCommitted(ctx context.Context, bytes uint64) {
-	if r := FromContext(ctx); r != nil {
-		r.SetResultBytesCommitted(bytes)
-	}
-}
-
 func (r *Recorder) SetResultBytesCommitted(bytes uint64) {
 	if r == nil {
 		return

@@ -50,7 +50,7 @@ func (f fixture) newDataset(t *testing.T) (*Dataset, error) {
 		t.Fatal(err)
 	}
 	budget := resource.New(128 << 20)
-	store, err := storage.New(context.Background(), config.S3{}, config.S3{}, budget)
+	store, err := storage.New(context.Background(), config.S3{}, config.S3{}, budget, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func (f fixture) newDataset(t *testing.T) (*Dataset, error) {
 			MaxDepth:       64,
 		},
 	}
-	ds, err := New(context.Background(), cfg, store, budget)
+	ds, err := New(context.Background(), cfg, store, budget, nil, false)
 	t.Cleanup(func() {
 		if ds != nil {
 			_ = ds.Close()

@@ -69,13 +69,7 @@ func (c boundedCodec) DecodeWithError(dst, src []byte) ([]byte, error) {
 // use. Its owner must retain a ParquetCodecWorkspace reservation until Close.
 // Unlike the process-wide codec registry, its lifetime follows the reader.
 type ParquetDecoder struct {
-	zstd   *zstd.Decoder
-	closed bool
-}
-
-// NewParquetDecoder creates a lazy, reader-owned bounded decoder.
-func NewParquetDecoder() (*ParquetDecoder, error) {
-	return &ParquetDecoder{}, nil
+	zstd *zstd.Decoder
 }
 
 // Close releases retained codec scratch and may be called repeatedly.
@@ -84,14 +78,10 @@ func (d *ParquetDecoder) Close() {
 		d.zstd.Close()
 		d.zstd = nil
 	}
-	d.closed = true
 }
 
 // Decode writes only within dst's declared length, irrespective of its capacity.
 func (d *ParquetDecoder) Decode(kind compress.Compression, dst, src []byte) ([]byte, error) {
-	if d.closed {
-		return nil, fmt.Errorf("parquet: decoder is closed")
-	}
 	switch kind {
 	case compress.Codecs.Uncompressed:
 		if len(src) > len(dst) {

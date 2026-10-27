@@ -41,12 +41,6 @@ const (
 	decodedCellOverhead = 16
 )
 
-// rowBytes is the retained cost of one row of capacity: its location, reject
-// slot and one state byte per column.
-func rowBytes(columns int) int64 {
-	return locationBytes + rawSlotBytes + int64(columns)
-}
-
 func (d *Dataset) Open(ctx context.Context) (Reader, error) {
 	if d.closed {
 		return nil, errors.New("dataset is closed")
@@ -254,7 +248,9 @@ func (b *lexicalBatch) ensureRow() error {
 	}
 	grow := max(rows, b.r.lastRows, minRowCapacity)
 	grow = min(grow, maxBatchRows-rows)
-	if err := b.reserve(int64(grow)*rowBytes(len(b.states)), "source batch rows"); err != nil {
+	// The retained cost of one row of capacity: its location, reject slot and
+	// one state byte per column.
+	if err := b.reserve(int64(grow)*(locationBytes+rawSlotBytes+int64(len(b.states))), "source batch rows"); err != nil {
 		return err
 	}
 	capacity := rows + grow

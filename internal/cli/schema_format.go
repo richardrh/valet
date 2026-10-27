@@ -25,7 +25,7 @@ func writeSchemaText(w io.Writer, report *source.SchemaReport) error {
 	out.printf("Metadata only: %d objects; %d footer-declared rows (unverified).\n", report.ObjectsChecked, report.DeclaredRows)
 	out.printf("Payload decoding, integrity and value castability are not evaluated. Required column presence does not establish non-null values.\n")
 	if report.BaselineSourceOrdinal != 0 {
-		out.printf("Schema baseline: first object, source %d %q (not a user-declared schema).\n", report.BaselineSourceOrdinal, schemaTextURI(report.BaselineSource))
+		out.printf("Schema baseline: first object, source %d %q (not a user-declared schema).\n", report.BaselineSourceOrdinal, storage.LogURI(report.BaselineSource).LogValue().String())
 	} else {
 		out.printf("Schema expectations: declared input schema and applicable metadata rules.\n")
 	}
@@ -33,7 +33,7 @@ func writeSchemaText(w io.Writer, report *source.SchemaReport) error {
 	// order without building another unbudgeted report or retaining source data.
 	difference := 0
 	for _, object := range report.Objects {
-		out.printf("\nSource %d: %q\n", object.SourceOrdinal, schemaTextURI(object.URI))
+		out.printf("\nSource %d: %q\n", object.SourceOrdinal, storage.LogURI(object.URI).LogValue().String())
 		out.printf("  Footer-declared rows: %d (unverified)\n", object.DeclaredRows)
 		for _, field := range object.Fields {
 			out.printf("  Field %q", field.Name)
@@ -128,8 +128,4 @@ func (w *schemaTextWriter) attributes(a *source.SchemaAttributes) {
 	if a.ArrowType != "" {
 		w.printf(", arrow_type=%q", a.ArrowType)
 	}
-}
-
-func schemaTextURI(uri string) string {
-	return storage.LogURI(uri).LogValue().String()
 }

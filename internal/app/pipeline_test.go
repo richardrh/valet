@@ -21,7 +21,7 @@ import (
 func TestPipelineOverlapsEvaluationAndOrderedWriteWithoutEarlyRelease(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	cfg := runConfig()
+	cfg := runConfig(t, "rows.csv", "out")
 	cfg.Execution.Workers = 3
 	budget := resource.New(cfg.BudgetBytes())
 	var released [6]atomic.Bool
@@ -94,7 +94,7 @@ func TestPipelineOverlapsEvaluationAndOrderedWriteWithoutEarlyRelease(t *testing
 func TestPipelineWriterFailureCancelsAndJoinsPrefetch(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	cfg := runConfig()
+	cfg := runConfig(t, "rows.csv", "out")
 	cfg.Execution.Workers = 3
 	budget := resource.New(cfg.BudgetBytes())
 	writerErr := errors.New("output failed")
@@ -144,7 +144,7 @@ func TestPipelineWriterFailureCancelsAndJoinsPrefetch(t *testing.T) {
 func TestPipelineEvaluationFailureJoinsBlockedRead(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	cfg := runConfig()
+	cfg := runConfig(t, "rows.csv", "out")
 	cfg.Execution.Workers = 2
 	budget := resource.New(cfg.BudgetBytes())
 	evalErr := errors.New("evaluation failed")
@@ -184,7 +184,7 @@ func TestPipelineEvaluationFailureJoinsBlockedRead(t *testing.T) {
 }
 
 func TestPipelineResourcePanicJoinsBeforeReturning(t *testing.T) {
-	cfg := runConfig()
+	cfg := runConfig(t, "rows.csv", "out")
 	cfg.Execution.Workers = 2
 	budget := resource.New(cfg.BudgetBytes())
 	limit := &resource.ResourceLimitError{Phase: "writer", Limit: 10, Used: 8, Requested: 4}
@@ -215,7 +215,7 @@ func TestPipelineResourcePanicJoinsBeforeReturning(t *testing.T) {
 func TestPipelineSingleWorkerAndTightBudgetUseSerialOwnership(t *testing.T) {
 	for _, workers := range []int{1, 4} {
 		t.Run(fmt.Sprintf("workers%d", workers), func(t *testing.T) {
-			cfg := runConfig()
+			cfg := runConfig(t, "rows.csv", "out")
 			cfg.Execution.Workers = workers
 			budget := resource.New(1 << 20)
 			var live atomic.Int64
@@ -253,20 +253,21 @@ func (r *stageReader) Next(ctx context.Context) (*data.Batch, error) { return r.
 func (r *stageReader) Close() error                                  { return nil }
 
 type stageProgram struct {
-	fakeProgram
 	evaluate func(*data.Batch) (*data.Result, error)
 }
 
+func (p *stageProgram) Summary() *data.Summary                           { return nil }
 func (p *stageProgram) Evaluate(batch *data.Batch) (*data.Result, error) { return p.evaluate(batch) }
+func (p *stageProgram) ApplyStatistics(*data.GroupEvidence) error        { return nil }
 
 type stageWriter struct {
-	fakeWriter
 	write func(*data.Batch, *data.Result) error
 }
 
 func (w *stageWriter) WriteBatch(batch *data.Batch, result *data.Result) error {
 	return w.write(batch, result)
 }
+func (w *stageWriter) WriteEvidence(*data.GroupEvidence) error { return nil }
 
 func stageBatch(budget *resource.Budget, value int64, cleanup func()) *data.Batch {
 	schema := arrow.NewSchema([]arrow.Field{{Name: "id", Type: arrow.PrimitiveTypes.Int64}}, nil)
@@ -285,7 +286,7 @@ func TestPipelineCancellationAndProgrammingPanicJoinRead(t *testing.T) {
 		t.Run(fmt.Sprintf("panic%v", panicWriter), func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			cfg := runConfig()
+			cfg := runConfig(t, "rows.csv", "out")
 			cfg.Execution.Workers = 2
 			budget := resource.New(cfg.BudgetBytes())
 			readingSecond := make(chan struct{})

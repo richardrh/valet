@@ -61,7 +61,7 @@ func TestLocalReplacementWithFIFOIsRejected(t *testing.T) {
 	})
 	t.Run("OpenAt", func(t *testing.T) {
 		rejectFIFOWithoutBlocking(t, name, func() error {
-			reader, err := store.OpenAt(context.Background(), obj)
+			reader, err := store.OpenAt(context.Background(), obj, ReadVerified)
 			if reader != nil {
 				t.Errorf("OpenAt reader = %v, want nil for rejected FIFO", reader)
 			}

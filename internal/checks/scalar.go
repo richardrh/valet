@@ -289,7 +289,11 @@ func (v scalar) rat(dst *big.Rat) bool {
 		lo.SetUint64(v.decimal[0])
 		n.Add(&hi, &lo)
 		var scratch big.Int
-		den := pow10Int(abs32(v.scale), &scratch)
+		scale := v.scale
+		if scale < 0 {
+			scale = -scale
+		}
+		den := pow10Int(scale, &scratch)
 		if v.scale < 0 {
 			n.Mul(&n, den)
 			dst.SetInt(&n)
@@ -300,12 +304,6 @@ func (v scalar) rat(dst *big.Rat) bool {
 		return false
 	}
 	return true
-}
-func abs32(v int32) int32 {
-	if v < 0 {
-		return -v
-	}
-	return v
 }
 
 // pow10Table holds 10^0..10^38, the decimal128 scale range. Entries are only
@@ -645,10 +643,6 @@ func isoDateScalar(s string) (scalar, bool) {
 	return dateScalar(t.Unix()), true
 }
 
-func dateLayout(format string) (string, error) {
-	return config.DateLayout(format)
-}
-
 // dateLayoutsParam collects `format` then `formats` from check parameters and
 // translates each strftime pattern to a Go layout. The result may be empty.
 func dateLayoutsParam(m map[string]any) ([]string, error) {
@@ -665,7 +659,7 @@ func dateLayoutsParam(m map[string]any) ([]string, error) {
 	}
 	layouts := make([]string, 0, len(formats))
 	for _, f := range formats {
-		l, err := dateLayout(f)
+		l, err := config.DateLayout(f)
 		if err != nil {
 			return nil, err
 		}
@@ -694,4 +688,111 @@ func decimalRat(s string, dst *big.Rat) bool {
 	}
 	_, ok := dst.SetString(s)
 	return ok
+}
+
+// literalSet accelerates homogeneous primitive lists only when scalar identity
+// equals the existing comparator. Cross-domain coercions keep the linear path.
+type literalSet struct {
+	kind   valueKind
+	values map[scalar]struct{}
+}
+
+func (p *Program) membershipSet(values []scalar, numeric bool) (*literalSet, error) {
+	if len(values) < 8 {
+		return nil, nil
+	}
+	kind := values[0].kind
+	switch kind {
+	case valString:
+		if numeric {
+			return nil, nil
+		}
+	case valInt, valUint, valFloat, valBool:
+	default:
+		return nil, nil
+	}
+	for _, value := range values {
+		if value.kind != kind {
+			return nil, nil
+		}
+	}
+	if err := p.reserve(int64(len(values))*bytesPerOperand, "membership lookup index"); err != nil {
+		return nil, err
+	}
+	set := &literalSet{kind: kind, values: make(map[scalar]struct{}, len(values))}
+	for _, value := range values {
+		if kind == valFloat && !finite(value.f) {
+			continue
+		}
+		set.values[value] = struct{}{}
+	}
+	return set, nil
+}
+func (s *literalSet) lookup(v scalar) (found, handled bool) {
+	if s == nil || v.kind != s.kind {
+		return false, false
+	}
+	if v.kind == valFloat && !finite(v.f) {
+		return false, true
+	}
+	_, found = s.values[v]
+	return found, true
+}
+
+// Literal conversion belongs to compilation, not generic numeric comparison:
+// integer/decimal operands retain exact rationals, while floating operands use
+// literals rounded once to the same declared width as their Arrow cells.
+//
+// bindFloatingLiteral rounds a numeric literal for a float32/float64 operand.
+// With numericString, numeric-looking string literals are rounded too (ranges
+// and conditions); otherwise strings stay text so equality never coerces them.
+func bindFloatingLiteral(value scalar, typ string, numericString bool) (scalar, error) {
+	if !isFloatType(typ) {
+		return value, nil
+	}
+	if !value.isNumber() && !(numericString && value.kind == valString) {
+		return value, nil
+	}
+	bits := 64
+	if typ == "float32" {
+		bits = 32
+	}
+	var f float64
+	var err error
+	switch {
+	case value.kind == valNumberText || value.kind == valString:
+		// Parse directly at target width to avoid decimal -> Float64 -> Float32
+		// double rounding at halfway boundaries.
+		f, err = strconv.ParseFloat(value.s, bits)
+	case bits == 32 && value.kind == valInt:
+		f = float64(float32(value.i))
+	case bits == 32 && value.kind == valUint:
+		f = float64(float32(value.u))
+	default:
+		var ok bool
+		f, ok = value.number()
+		if !ok {
+			return scalar{}, fmt.Errorf("invalid floating comparison literal")
+		}
+		if bits == 32 {
+			f = float64(float32(f))
+		}
+	}
+	if err != nil || !finite(f) {
+		return scalar{}, fmt.Errorf("comparison literal is outside %s range", typ)
+	}
+	return floatScalar(f), nil
+}
+
+// optionalLiteral returns nil when key is absent.
+func optionalLiteral(m map[string]any, key string) (*scalar, error) {
+	v, ok := m[key]
+	if !ok {
+		return nil, nil
+	}
+	lit, err := literal(v)
+	if err != nil {
+		return nil, err
+	}
+	return &lit, nil
 }

@@ -335,64 +335,53 @@ func validateURI(s, label string) error {
 	return nil
 }
 
-type canonicalLocation struct {
-	s3          bool
-	bucket, key string
-	local       string
-}
-
-func parseCanonicalLocation(raw string) (canonicalLocation, error) {
-	if strings.HasPrefix(raw, "s3://") {
-		parsed, err := url.Parse(raw)
-		if err != nil {
-			return canonicalLocation{}, err
-		}
-		return canonicalLocation{s3: true, bucket: strings.ToLower(parsed.Host), key: strings.TrimPrefix(parsed.Path, "/")}, nil
-	}
-	absolute, err := filepath.Abs(raw)
-	if err != nil {
-		return canonicalLocation{}, err
-	}
-	probe := filepath.Clean(absolute)
-	var suffix []string
-	for {
-		resolved, resolveErr := filepath.EvalSymlinks(probe)
-		if resolveErr == nil {
-			for i := len(suffix) - 1; i >= 0; i-- {
-				resolved = filepath.Join(resolved, suffix[i])
-			}
-			resolved = filepath.Clean(resolved)
-			if runtime.GOOS == "windows" {
-				resolved = strings.ToLower(resolved)
-			}
-			return canonicalLocation{local: resolved}, nil
-		}
-		if !errors.Is(resolveErr, os.ErrNotExist) {
-			return canonicalLocation{}, resolveErr
-		}
-		parent := filepath.Dir(probe)
-		if parent == probe {
-			return canonicalLocation{}, resolveErr
-		}
-		suffix = append(suffix, filepath.Base(probe))
-		probe = parent
-	}
-}
-
-func localContains(base, candidate string) bool {
-	relative, err := filepath.Rel(base, candidate)
-	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
-}
-
 func pathsOverlap(a, b string) (bool, error) {
-	left, err := parseCanonicalLocation(a)
-	if err != nil {
-		return false, err
+	type location struct {
+		s3          bool
+		bucket, key string
+		local       string
 	}
-	right, err := parseCanonicalLocation(b)
-	if err != nil {
-		return false, err
+	var locations [2]location
+	for i, raw := range [2]string{a, b} {
+		if strings.HasPrefix(raw, "s3://") {
+			parsed, err := url.Parse(raw)
+			if err != nil {
+				return false, err
+			}
+			locations[i] = location{s3: true, bucket: strings.ToLower(parsed.Host), key: strings.TrimPrefix(parsed.Path, "/")}
+			continue
+		}
+		absolute, err := filepath.Abs(raw)
+		if err != nil {
+			return false, err
+		}
+		probe := filepath.Clean(absolute)
+		var suffix []string
+		for {
+			resolved, resolveErr := filepath.EvalSymlinks(probe)
+			if resolveErr == nil {
+				for i := len(suffix) - 1; i >= 0; i-- {
+					resolved = filepath.Join(resolved, suffix[i])
+				}
+				resolved = filepath.Clean(resolved)
+				if runtime.GOOS == "windows" {
+					resolved = strings.ToLower(resolved)
+				}
+				locations[i] = location{local: resolved}
+				break
+			}
+			if !errors.Is(resolveErr, os.ErrNotExist) {
+				return false, resolveErr
+			}
+			parent := filepath.Dir(probe)
+			if parent == probe {
+				return false, resolveErr
+			}
+			suffix = append(suffix, filepath.Base(probe))
+			probe = parent
+		}
 	}
+	left, right := locations[0], locations[1]
 	if left.s3 != right.s3 {
 		return false, nil
 	}
@@ -402,7 +391,13 @@ func pathsOverlap(a, b string) (bool, error) {
 		}
 		return strings.HasPrefix(left.key, right.key) || strings.HasPrefix(right.key, left.key), nil
 	}
-	return localContains(left.local, right.local) || localContains(right.local, left.local), nil
+	for _, pair := range [2][2]string{{left.local, right.local}, {right.local, left.local}} {
+		relative, err := filepath.Rel(pair[0], pair[1])
+		if err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 func validateS3(s S3, label string) error {
 	if s.Endpoint != "" {
@@ -436,10 +431,6 @@ func validateCode(code, level string, seen map[string]bool) error {
 	return nil
 }
 
-func supportedType(s string) bool {
-	_, ok := CanonicalType(s)
-	return ok
-}
 func numericType(s string) bool {
 	canonical, ok := CanonicalType(s)
 	return ok && (strings.HasPrefix(canonical, "int") || strings.HasPrefix(canonical, "uint") || strings.HasPrefix(canonical, "float") || canonical == "decimal")
@@ -465,7 +456,7 @@ func validateSchema(s *Schema) error {
 		if name == "" {
 			return fmt.Errorf("input.schema has a column with an empty name")
 		}
-		if !supportedType(col.Type) {
+		if _, ok := CanonicalType(col.Type); !ok {
 			return unsupportedType(fmt.Sprintf("input.schema column %q type", name), col.Type)
 		}
 		if strings.HasPrefix(name, "__valet_") {
@@ -494,7 +485,7 @@ func validateSchema(s *Schema) error {
 			return fmt.Errorf("column %s: formats require date/timestamp type", name)
 		}
 		for _, f := range col.Formats {
-			if err := validateDateFormat(f); err != nil {
+			if _, err := DateLayout(f); err != nil {
 				return fmt.Errorf("column %s: %w", name, err)
 			}
 		}

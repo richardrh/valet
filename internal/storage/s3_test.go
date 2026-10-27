@@ -105,7 +105,7 @@ func TestS3ConditionalStreamingAndRanges(t *testing.T) {
 		t.Errorf("streamed body = %q, want %q", got, content)
 	}
 
-	reader, err := store.OpenAt(context.Background(), obj)
+	reader, err := store.OpenAt(context.Background(), obj, ReadVerified)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +142,7 @@ func TestS3RejectsChangedAndIgnoredRange(t *testing.T) {
 		return err
 	}
 	readRange := func(t *testing.T, store *Store, obj Object) error {
-		r, err := store.OpenAt(context.Background(), obj)
+		r, err := store.OpenAt(context.Background(), obj, ReadVerified)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -347,7 +347,7 @@ func TestS3ResponseBudgetIsReservedBeforeRequests(t *testing.T) {
 			return err
 		}},
 		{name: "range", call: func(store *Store) error {
-			reader, err := store.OpenAt(context.Background(), object)
+			reader, err := store.OpenAt(context.Background(), object, ReadVerified)
 			if err != nil {
 				return err
 			}
@@ -357,7 +357,7 @@ func TestS3ResponseBudgetIsReservedBeforeRequests(t *testing.T) {
 			return err
 		}},
 		{name: "put", call: func(store *Store) error {
-			return store.Put(context.Background(), object.URI, []byte("body"))
+			return putObject(context.Background(), store, object.URI, []byte("body"))
 		}},
 		{name: "list", call: func(store *Store) error {
 			_, err := store.Discover(context.Background(), config.Source{Prefix: "s3://bucket/prefix", Filter: "csv"})
@@ -458,7 +458,7 @@ func TestS3ReaderAtCoalescesPinnedConcurrentRangesAndTail(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := budget.Used()
-	reader, err := store.OpenAt(context.Background(), obj)
+	reader, err := store.OpenAt(context.Background(), obj, ReadVerified)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -524,7 +524,7 @@ func TestS3RangeCacheFallsBackWithoutStealingResponseBudget(t *testing.T) {
 	}))
 	defer server.Close()
 	store, budget := testStore(t, sdkResponseCharge+s3RangeReaderCharge+s3BodyCharge, server.URL)
-	reader, err := store.OpenAt(context.Background(), Object{URI: "s3://bucket/source.parquet", Size: 1 << 20, ETag: snapshotETag})
+	reader, err := store.OpenAt(context.Background(), Object{URI: "s3://bucket/source.parquet", Size: 1 << 20, ETag: snapshotETag}, ReadVerified)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -552,7 +552,7 @@ func TestS3MetadataReaderNeverReadsAheadIntoPayload(t *testing.T) {
 	}))
 	defer server.Close()
 	store, budget := testStore(t, 8<<20, server.URL)
-	reader, err := store.OpenAtMetadata(context.Background(), Object{URI: "s3://bucket/source.parquet", Size: 1 << 20, ETag: snapshotETag})
+	reader, err := store.OpenAt(context.Background(), Object{URI: "s3://bucket/source.parquet", Size: 1 << 20, ETag: snapshotETag}, ReadMetadata)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -582,7 +582,7 @@ func TestS3RangeCacheNeverPublishesFailedFill(t *testing.T) {
 	}))
 	defer server.Close()
 	store, budget := testStore(t, 8<<20, server.URL)
-	reader, err := store.OpenAt(context.Background(), Object{URI: "s3://bucket/source.parquet", Size: 1 << 20, ETag: snapshotETag})
+	reader, err := store.OpenAt(context.Background(), Object{URI: "s3://bucket/source.parquet", Size: 1 << 20, ETag: snapshotETag}, ReadVerified)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -626,7 +626,7 @@ func TestS3RangeCacheGrowthRespectsSharedBudgetOverlap(t *testing.T) {
 			}))
 			defer server.Close()
 			store, budget := testStore(t, 8<<20, server.URL)
-			reader, err := store.OpenAt(context.Background(), Object{URI: "s3://bucket/source.parquet", Size: objectSize, ETag: snapshotETag})
+			reader, err := store.OpenAt(context.Background(), Object{URI: "s3://bucket/source.parquet", Size: objectSize, ETag: snapshotETag}, ReadVerified)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -3,6 +3,7 @@ package storage
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -12,10 +13,12 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/richardrh/valet/internal/config"
 	"github.com/richardrh/valet/internal/resource"
@@ -99,48 +102,32 @@ type writerLink struct {
 	next   *writerLink
 }
 
-type options struct {
-	logger *slog.Logger
-}
-
-// Option configures a Store.
-type Option func(*options)
-
-// WithLogger sets the logger for discovery, publication and abort events.
-func WithLogger(logger *slog.Logger) Option {
-	return func(o *options) {
-		if logger != nil {
-			o.logger = logger
-		}
-	}
-}
-
-func New(ctx context.Context, input, output config.S3, budget *resource.Budget, opts ...Option) (*Store, error) {
+// New opens the input and output clients. A nil logger discards discovery,
+// publication and abort events.
+func New(ctx context.Context, input, output config.S3, budget *resource.Budget, logger *slog.Logger) (*Store, error) {
 	if budget == nil {
 		return nil, errors.New("storage requires a resource budget")
 	}
-	o := options{logger: slog.New(slog.DiscardHandler)}
-	for _, opt := range opts {
-		opt(&o)
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
 	}
 	if output == (config.S3{}) {
 		output = input
 	}
-	in, err := newS3(ctx, input, o.logger)
+	in, err := newS3(ctx, input, logger)
 	if err != nil {
 		return nil, err
 	}
 	out := in
 	if output != input {
-		out, err = newS3(ctx, output, o.logger)
+		out, err = newS3(ctx, output, logger)
 		if err != nil {
 			return nil, err
 		}
 	}
-	return &Store{budget: budget, logger: o.logger, input: in, output: out, outputSettings: output}, nil
+	return &Store{budget: budget, logger: logger, input: in, output: out, outputSettings: output}, nil
 }
 
-func (s *Store) reserve(n int64, phase string) error { return s.budget.Reserve(n, phase) }
 func (s *Store) remember(obj Object, info os.FileInfo) (*snapshot, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -155,7 +142,7 @@ func (s *Store) remember(obj Object, info os.FileInfo) (*snapshot, error) {
 	}
 	// Includes file metadata, snapshot, and conservative hash-table growth slack.
 	n := snapshotBaseCharge + int64(len(obj.URI)+len(obj.ETag)+len(obj.VersionID))
-	if err := s.reserve(n, "storage identities"); err != nil {
+	if err := s.budget.Reserve(n, "storage identities"); err != nil {
 		return nil, err
 	}
 	// Clone strings so SDK response backing storage is not retained.
@@ -176,7 +163,7 @@ func (s *Store) track(w Writer) error {
 	if s.closed {
 		return os.ErrClosed
 	}
-	if err := s.reserve(writerRegistryCharge, "storage writer registry"); err != nil {
+	if err := s.budget.Reserve(writerRegistryCharge, "storage writer registry"); err != nil {
 		return err
 	}
 	s.writers = &writerLink{writer: w, next: s.writers}
@@ -252,7 +239,7 @@ func Join(base string, elements ...string) string {
 			}
 			key += component
 		}
-		return (&url.URL{Scheme: "s3", Host: bucket, Path: "/" + key}).String()
+		return objectURI(bucket, key)
 	}
 	for _, e := range elements {
 		base = filepath.Join(base, filepath.FromSlash(strings.TrimPrefix(path.Clean("/"+strings.ReplaceAll(e, "\\", "/")), "/")))
@@ -268,7 +255,27 @@ func (s *Store) Stat(ctx context.Context, uri string) (Object, error) {
 	var info os.FileInfo
 	var err error
 	if isS3(uri) {
-		obj, err = s.statS3(ctx, uri)
+		var bucket, key string
+		bucket, key, err = s3URI(uri)
+		if err != nil {
+			return Object{}, err
+		}
+		if key == "" {
+			return Object{}, errors.New("S3 object key is empty")
+		}
+		if err = s.budget.Reserve(sdkResponseCharge, "S3 HEAD response"); err != nil {
+			return Object{}, err
+		}
+		result, headErr := s.input.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(bucket), Key: aws.String(key)})
+		s.budget.Release(sdkResponseCharge)
+		if headErr != nil {
+			return Object{}, fmt.Errorf("head S3 object: %w", headErr)
+		}
+		if result.ContentLength == nil || *result.ContentLength < 0 {
+			return Object{}, errors.New("S3 object has no valid content length")
+		}
+		obj = Object{URI: objectURI(bucket, key), Size: *result.ContentLength, ETag: aws.ToString(result.ETag), VersionID: aws.ToString(result.VersionId), ModTime: aws.ToTime(result.LastModified)}
+		err = validS3Identity(obj)
 	} else {
 		var p string
 		p, err = localPath(uri)
@@ -312,7 +319,7 @@ func (s *Store) Discover(ctx context.Context, src config.Source) ([]Object, erro
 	var seen map[string]struct{}
 	if src.Prefix == "" {
 		indexCharge := int64(len(src.URIs)) * discoveryIndexEntryCharge
-		if err := s.reserve(indexCharge, "discovery duplicate index"); err != nil {
+		if err := s.budget.Reserve(indexCharge, "discovery duplicate index"); err != nil {
 			return nil, err
 		}
 		defer s.budget.Release(indexCharge)
@@ -332,7 +339,7 @@ func (s *Store) Discover(ctx context.Context, src config.Source) ([]Object, erro
 		if len(objects) == cap(objects) {
 			capacity := max(8, cap(objects)*2)
 			n := int64(capacity) * discoveryObjectCharge
-			if err := s.reserve(n, "discovery object list"); err != nil {
+			if err := s.budget.Reserve(n, "discovery object list"); err != nil {
 				return err
 			}
 			next := make([]Object, len(objects), capacity)
@@ -411,7 +418,7 @@ func (s *Store) walkLocal(ctx context.Context, root string, recursive bool, filt
 		return err
 	}
 	const charge = directoryWalkCharge
-	if err := s.reserve(charge, "directory discovery"); err != nil {
+	if err := s.budget.Reserve(charge, "directory discovery"); err != nil {
 		return err
 	}
 	defer s.budget.Release(charge)
@@ -454,37 +461,40 @@ func (s *Store) walkLocal(ctx context.Context, root string, recursive bool, filt
 }
 func (s *Store) Open(ctx context.Context, obj Object) (io.ReadCloser, error) {
 	if isS3(obj.URI) {
-		return s.openS3(ctx, obj, false, 0, obj.Size)
+		return s.openS3(ctx, obj, false, 0, obj.Size, false)
 	}
-	reader, err := s.openLocal(ctx, obj)
+	f, snap, err := s.pinnedFile(ctx, obj)
 	if err != nil {
 		return nil, err
 	}
-	return reader, nil
-}
-func (s *Store) OpenAt(ctx context.Context, obj Object) (ReadAtCloser, error) {
-	return s.openAt(ctx, obj, true)
-}
-
-// OpenAtMetadata opens exact metadata ranges without read-ahead or a full digest.
-// Callers publishing selective results must subsequently VerifyIdentity.
-func (s *Store) OpenAtMetadata(ctx context.Context, obj Object) (ReadAtCloser, error) {
-	return s.openAt(metadataReadContext(ctx), obj, false)
+	if err = s.budget.Reserve(localReaderCharge, "local digest reader"); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return &localReader{file: f, store: s, snap: snap, ctx: ctx, hash: sha256.New()}, nil
 }
 
-// OpenAtMetadataVerified preserves the ordinary close-time full-content baseline
-// while keeping metadata range requests exact.
-func (s *Store) OpenAtMetadataVerified(ctx context.Context, obj Object) (ReadAtCloser, error) {
-	return s.openAt(metadataReadContext(ctx), obj, true)
-}
+// ReadMode selects how an OpenAt reader verifies content and attributes bytes.
+type ReadMode int
 
-// OpenAtSelective reads exact payload ranges without a whole-file hash. It is
-// valid only for explicitly disclosed partial verification.
-func (s *Store) OpenAtSelective(ctx context.Context, obj Object) (ReadAtCloser, error) {
-	return s.openAt(ctx, obj, false)
-}
+const (
+	// ReadVerified reads with S3 read-ahead and re-verifies a full-content
+	// digest at Close.
+	ReadVerified ReadMode = iota
+	// ReadSelective reads exact payload ranges without a whole-file hash. It is
+	// valid only for explicitly disclosed partial verification.
+	ReadSelective
+	// ReadMetadata opens exact metadata ranges without read-ahead or a full
+	// digest. Callers publishing selective results must subsequently VerifyIdentity.
+	ReadMetadata
+	// ReadMetadataVerified preserves the ordinary close-time full-content
+	// baseline while keeping metadata range requests exact.
+	ReadMetadataVerified
+)
 
-func (s *Store) openAt(ctx context.Context, obj Object, verifyDigest bool) (ReadAtCloser, error) {
+func (s *Store) OpenAt(ctx context.Context, obj Object, mode ReadMode) (ReadAtCloser, error) {
+	verifyDigest := mode == ReadVerified || mode == ReadMetadataVerified
+	metadata := mode == ReadMetadata || mode == ReadMetadataVerified
 	if isS3(obj.URI) {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -492,12 +502,12 @@ func (s *Store) openAt(ctx context.Context, obj Object, verifyDigest bool) (Read
 		if err := validS3Identity(obj); err != nil {
 			return nil, err
 		}
-		if err := s.reserve(s3RangeReaderCharge, "S3 range reader"); err != nil {
+		if err := s.budget.Reserve(s3RangeReaderCharge, "S3 range reader"); err != nil {
 			return nil, err
 		}
-		return &s3ReaderAt{store: s, ctx: ctx, obj: obj, coalesce: verifyDigest && !isMetadataRead(ctx)}, nil
+		return &s3ReaderAt{store: s, ctx: ctx, obj: obj, coalesce: verifyDigest && !metadata, metadata: metadata}, nil
 	}
-	reader, err := s.openLocalAt(ctx, obj, verifyDigest)
+	reader, err := s.openLocalAt(ctx, obj, verifyDigest, metadata)
 	if err != nil {
 		return nil, err
 	}
@@ -539,47 +549,6 @@ func (s *Store) Create(ctx context.Context, uri string) (Writer, error) {
 	}
 	return s.createLocal(ctx, uri)
 }
-func (s *Store) Put(ctx context.Context, uri string, body []byte) error {
-	if isS3(uri) {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		s.mu.Lock()
-		closed := s.closed
-		s.mu.Unlock()
-		if closed {
-			return os.ErrClosed
-		}
-		bucket, key, err := s3URI(uri)
-		if err != nil {
-			return err
-		}
-		if key == "" {
-			return errors.New("S3 output key is empty")
-		}
-		writeID, idErr := newS3WriteID()
-		if idErr != nil {
-			return idErr
-		}
-		// The caller owns this already-bounded buffer; no upload staging copy is needed.
-		if err = s.putS3Object(ctx, bucket, key, body, writeID, s3BodyDigest(body)); err != nil {
-			return err
-		}
-		s.logger.Debug("object uploaded", slog.Any("uri", LogURI(uri)), slog.Int("bytes", len(body)), slog.Int("parts", 1))
-		return nil
-	}
-	w, err := s.Create(ctx, uri)
-	if err != nil {
-		return err
-	}
-	if _, err = w.Write(body); err != nil {
-		return errors.Join(err, w.Abort())
-	}
-	if err = w.Close(); err != nil {
-		return errors.Join(err, w.Abort())
-	}
-	return nil
-}
 
 // Compare canonical S3 keys rather than their percent-escaped URI spelling.
 func uriLess(a, b string) bool {
@@ -590,11 +559,9 @@ func uriLess(a, b string) bool {
 		value := s[*index]
 		(*index)++
 		if value == '%' && *index+1 < len(s) {
-			hi, okHi := hexDigit(s[*index])
-			lo, okLo := hexDigit(s[*index+1])
 			// A malformed escape compares as the literal '%' byte.
-			if okHi && okLo {
-				value = hi<<4 | lo
+			if v, err := strconv.ParseUint(s[*index:*index+2], 16, 8); err == nil {
+				value = byte(v)
 				*index += 2
 			}
 		}
@@ -608,17 +575,6 @@ func uriLess(a, b string) bool {
 		}
 	}
 	return i == len(a) && j < len(b)
-}
-func hexDigit(c byte) (byte, bool) {
-	switch {
-	case c >= '0' && c <= '9':
-		return c - '0', true
-	case c >= 'A' && c <= 'F':
-		return c - 'A' + 10, true
-	case c >= 'a' && c <= 'f':
-		return c - 'a' + 10, true
-	}
-	return 0, false
 }
 
 // objectURI is the canonical s3:// spelling of bucket and key.
@@ -651,12 +607,4 @@ func (u logURI) LogValue() slog.Value {
 	parsed.Fragment = ""
 	parsed.RawFragment = ""
 	return slog.StringValue(parsed.String())
-}
-
-// errAttr is the error attribute, empty (and dropped by handlers) when nil.
-func errAttr(err error) slog.Attr {
-	if err == nil {
-		return slog.Attr{}
-	}
-	return slog.String("error", err.Error())
 }

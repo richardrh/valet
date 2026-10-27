@@ -10,6 +10,7 @@ import (
 	"github.com/richardrh/valet/internal/checks"
 	"github.com/richardrh/valet/internal/config"
 	"github.com/richardrh/valet/internal/data"
+	"github.com/richardrh/valet/internal/resource"
 )
 
 type plannedField struct {
@@ -58,16 +59,11 @@ type sourceCapabilities struct {
 	Streaming          bool `json:"streaming"`
 }
 
-// Plan describes a run with the production dependencies. cfg must already be
-// validated.
-func Plan(ctx context.Context, rt Runtime, cfg *config.Config) (*PlanDescription, error) {
-	return Production().Plan(ctx, rt, cfg)
-}
-
 // Plan inspects source metadata/inference samples and binds rule definitions.
 // It does not open a validation pass, load reference indexes or accumulate
-// global state. StateFitGuaranteed is consequently always false.
-func (d Deps) Plan(ctx context.Context, rt Runtime, cfg *config.Config) (description *PlanDescription, err error) {
+// global state. StateFitGuaranteed is consequently always false. cfg must
+// already be validated.
+func Plan(ctx context.Context, rt Runtime, cfg *config.Config) (description *PlanDescription, err error) {
 	ctx, cancel := context.WithCancel(ctx)
 	log := rt.logger()
 	var s *session
@@ -87,12 +83,12 @@ func (d Deps) Plan(ctx context.Context, rt Runtime, cfg *config.Config) (descrip
 	if err = checkStart(ctx, cfg); err != nil {
 		return nil, err
 	}
-	s = newSession(log, cfg)
-	if err = d.open(ctx, s, cfg, true); err != nil {
+	s = &session{log: log, budget: resource.New(cfg.BudgetBytes())}
+	if err = s.open(ctx, cfg, true); err != nil {
 		return nil, err
 	}
 	started := time.Now()
-	rules, err := d.Describe(ctx, cfg, s.ds, s.store, s.budget)
+	rules, err := checks.Describe(ctx, cfg, s.ds, s.store, s.budget)
 	if err != nil {
 		return nil, fmt.Errorf("describe checks: %w", err)
 	}
@@ -100,7 +96,20 @@ func (d Deps) Plan(ctx context.Context, rt Runtime, cfg *config.Config) (descrip
 	schema := s.ds.Schema()
 	fields := make([]plannedField, 0, schema.NumFields())
 	for _, field := range schema.Fields() {
-		planned := plannedField{Name: field.Name, Type: canonicalPlanType(field.Type), Nullable: field.Nullable}
+		typeName, ok := config.CanonicalType(field.Type.Name())
+		if !ok {
+			switch field.Type.ID() {
+			case arrow.DATE64:
+				typeName = "date"
+			case arrow.LARGE_STRING:
+				typeName = "string"
+			case arrow.LARGE_BINARY, arrow.FIXED_SIZE_BINARY:
+				typeName = "binary"
+			default:
+				typeName = field.Type.Name()
+			}
+		}
+		planned := plannedField{Name: field.Name, Type: typeName, Nullable: field.Nullable}
 		switch typ := field.Type.(type) {
 		case *arrow.TimestampType:
 			planned.Timezone = typ.TimeZone
@@ -129,20 +138,4 @@ func (d Deps) Plan(ctx context.Context, rt Runtime, cfg *config.Config) (descrip
 		MemoryBudget:         s.budget.Limit(), BatchTarget: cfg.BatchBytes(), Workers: cfg.Execution.Workers,
 		ManagedPeak: s.budget.Peak(), StateFitGuaranteed: false,
 	}, nil
-}
-
-func canonicalPlanType(typ arrow.DataType) string {
-	if canonical, ok := config.CanonicalType(typ.Name()); ok {
-		return canonical
-	}
-	switch typ.ID() {
-	case arrow.DATE64:
-		return "date"
-	case arrow.LARGE_STRING:
-		return "string"
-	case arrow.LARGE_BINARY, arrow.FIXED_SIZE_BINARY:
-		return "binary"
-	default:
-		return typ.Name()
-	}
 }

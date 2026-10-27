@@ -1006,13 +1006,13 @@ func TestTransformArguments(t *testing.T) {
 
 func TestPortableDateDirectives(t *testing.T) {
 	for _, format := range []string{"%Y-%m-%d", "%d/%b/%Y", "%Y-%m-%dT%H:%M:%S%:z", "%F %T", "%%"} {
-		if err := validateDateFormat(format); err != nil {
-			t.Errorf("validateDateFormat(%q) error = %v, want nil", format, err)
+		if _, err := DateLayout(format); err != nil {
+			t.Errorf("DateLayout(%q) error = %v, want nil", format, err)
 		}
 	}
 	for _, format := range []string{"%Q", "%x", "%G-%V", "%", "%:Q"} {
-		if err := validateDateFormat(format); err == nil {
-			t.Errorf("validateDateFormat(%q) error = nil, want unsupported format rejected", format)
+		if _, err := DateLayout(format); err == nil {
+			t.Errorf("DateLayout(%q) error = nil, want unsupported format rejected", format)
 		}
 	}
 }

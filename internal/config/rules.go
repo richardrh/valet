@@ -6,6 +6,7 @@ import (
 	"math"
 	"math/big"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -58,15 +59,6 @@ func (s CheckSpec) AllowsWhen() bool {
 	return s.Scope == CheckScopeRow || s.Scope == CheckScopeReference
 }
 
-func (s CheckSpec) allows(param string) bool {
-	for _, p := range s.Params {
-		if p == param {
-			return true
-		}
-	}
-	return false
-}
-
 // Checks is the built-in check vocabulary keyed by check type name.
 var Checks = func() map[string]CheckSpec {
 	columnOrColumns := []string{"column", "columns"}
@@ -111,7 +103,7 @@ func validateCheck(r Rule, c Check) error {
 	}
 	p := c.Params
 	for key := range p {
-		if !spec.allows(key) {
+		if !slices.Contains(spec.Params, key) {
 			return fmt.Errorf("%s: unknown argument %q", c.Type, key)
 		}
 	}
@@ -135,7 +127,7 @@ func validateCheck(r Rule, c Check) error {
 			if name == "" || !ok {
 				return fmt.Errorf("schema_matches column %q must map to a type name", name)
 			}
-			if !supportedType(s) {
+			if _, ok := CanonicalType(s); !ok {
 				return unsupportedType(fmt.Sprintf("schema_matches column %q type", name), s)
 			}
 		}
@@ -162,7 +154,18 @@ func validateCheck(r Rule, c Check) error {
 		if key == "valid_length" {
 			key = "length"
 		}
-		n, ok := nonnegativeInteger(p[key])
+		var n uint64
+		ok := false
+		switch v := p[key].(type) {
+		case int:
+			n, ok = uint64(v), v >= 0
+		case int64:
+			n, ok = uint64(v), v >= 0
+		case uint64:
+			n, ok = v, true
+		case uint:
+			n, ok = uint64(v), true
+		}
 		if !ok || n > math.MaxInt64 {
 			return fmt.Errorf("%s must be a nonnegative integer", key)
 		}
@@ -258,7 +261,7 @@ func validateCheck(r Rule, c Check) error {
 		if err != nil {
 			return err
 		}
-		if !supportedType(s) {
+		if _, ok := CanonicalType(s); !ok {
 			return unsupportedType("expected_type", s)
 		}
 	case "date_format":
@@ -281,7 +284,7 @@ func validateCheck(r Rule, c Check) error {
 			return fmt.Errorf("date_format requires format or formats")
 		}
 		for _, f := range formats {
-			if err := validateDateFormat(f); err != nil {
+			if _, err := DateLayout(f); err != nil {
 				return err
 			}
 		}
@@ -359,19 +362,6 @@ func stringList(v any, label string, nonempty bool) ([]string, error) {
 	}
 	return result, nil
 }
-func nonnegativeInteger(v any) (uint64, bool) {
-	switch n := v.(type) {
-	case int:
-		return uint64(n), n >= 0
-	case int64:
-		return uint64(n), n >= 0
-	case uint64:
-		return n, true
-	case uint:
-		return uint64(n), true
-	}
-	return 0, false
-}
 func scalar(v any) bool {
 	switch n := v.(type) {
 	case nil, string, bool, int, int64, uint64:
@@ -383,10 +373,6 @@ func scalar(v any) bool {
 		return ok
 	}
 	return false
-}
-func validateDateFormat(s string) error {
-	_, err := DateLayout(s)
-	return err
 }
 func parseTimestampBound(s, timezone string) (time.Time, error) {
 	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
@@ -581,4 +567,122 @@ func validateDatasetRule(r DatasetRule, rowCodes map[string]bool, schema *Schema
 		}
 	}
 	return nil
+}
+
+// Values of options that the command line can also set. Configuration
+// validation, the JSON Schema and the CLI flags all read these lists.
+var (
+	OutputModes               = []string{"all", "failures", "report"}
+	ParquetStatisticsPolicies = []string{"off", "trusted"}
+)
+
+// OrList renders allowed values as "a, b or c".
+func OrList(values []string) string {
+	if len(values) < 2 {
+		return strings.Join(values, "")
+	}
+	return strings.Join(values[:len(values)-1], ", ") + " or " + values[len(values)-1]
+}
+
+// typeSpellings maps every accepted (lower-case) schema/check type spelling to
+// its canonical name. Sized names follow C's fixed-width integers without
+// _t and Arrow/Parquet; bare names follow Python, so int and float are
+// 64-bit (float is 32-bit in C, Arrow and Parquet, hence float32/double).
+var typeSpellings = map[string]string{
+	"null": "null",
+	"bool": "bool", "boolean": "bool",
+	"int": "int64", "integer": "int64", "int64": "int64",
+	"int8": "int8", "int16": "int16", "int32": "int32",
+	"uint8": "uint8", "uint16": "uint16", "uint32": "uint32", "uint64": "uint64",
+	"float": "float64", "double": "float64", "float64": "float64",
+	"float32": "float32",
+	"str":     "string", "string": "string", "utf8": "string",
+	"large_string": "string", "large_utf8": "string",
+	"binary": "binary", "bytes": "binary", "large_binary": "binary",
+	"date": "date", "date32": "date", "date64": "date",
+	"timestamp": "timestamp", "datetime": "timestamp",
+	"decimal": "decimal", "decimal128": "decimal",
+}
+
+// CanonicalType returns the single internal spelling for every supported
+// schema/check type name. Names are case-insensitive.
+func CanonicalType(name string) (string, bool) {
+	canonical, ok := typeSpellings[strings.ToLower(name)]
+	return canonical, ok
+}
+
+// typeHints answers names from C that Valet does not guess, because their
+// size or sign differs between platforms or they hide the size.
+var typeHints = map[string]string{
+	"long":               "long is 32-bit on Windows and 64-bit on Linux and macOS; write int32 or int64",
+	"unsigned long":      "unsigned long is 32-bit on Windows and 64-bit on Linux and macOS; write uint32 or uint64",
+	"long long":          "write int64",
+	"unsigned long long": "write uint64",
+	"short":              "write int16",
+	"unsigned short":     "write uint16",
+	"unsigned":           "write uint32",
+	"unsigned int":       "write uint32",
+	"char":               "char may be signed or unsigned; write int8 or uint8, or str for text",
+	"signed char":        "write int8",
+	"unsigned char":      "write uint8",
+	"long double":        "long double is not supported; write double (64-bit)",
+}
+
+// unsupportedType explains a type name Valet does not accept, suggesting the
+// spelling to write where one is known.
+func unsupportedType(what, name string) error {
+	lower := strings.Join(strings.Fields(strings.ToLower(name)), " ")
+	hint := typeHints[lower]
+	if trimmed, ok := strings.CutSuffix(lower, "_t"); ok && hint == "" {
+		if _, known := typeSpellings[trimmed]; known {
+			hint = "write " + trimmed
+		}
+	}
+	if hint == "" {
+		return fmt.Errorf("%s %q is not a supported type", what, name)
+	}
+	return fmt.Errorf("%s %q is not a supported type: %s", what, name, hint)
+}
+
+var dateDirectives = map[string]string{
+	"Y": "2006", "y": "06", "m": "01", "d": "02", "e": "_2",
+	"H": "15", "I": "03", "M": "04", "S": "05", "f": "000000",
+	"z": "-0700", ":z": "-07:00", "Z": "MST", "b": "Jan", "h": "Jan",
+	"B": "January", "p": "PM", "j": "002", "a": "Mon", "A": "Monday",
+	"F": "2006-01-02", "T": "15:04:05", "R": "15:04", "D": "01/02/06",
+	"%": "%",
+}
+
+// DateLayout validates and translates the supported strftime subset to a Go
+// time layout. Multi-byte directives are consumed atomically.
+func DateLayout(format string) (string, error) {
+	if format == "" {
+		return "", fmt.Errorf("date format must not be empty")
+	}
+	var out strings.Builder
+	out.Grow(len(format))
+	for i := 0; i < len(format); i++ {
+		if format[i] != '%' {
+			out.WriteByte(format[i])
+			continue
+		}
+		i++
+		if i >= len(format) {
+			return "", fmt.Errorf("date format ends with incomplete directive")
+		}
+		directive := string(format[i])
+		if format[i] == ':' {
+			if i+1 >= len(format) || format[i+1] != 'z' {
+				return "", fmt.Errorf("unsupported date directive %%:%c", format[min(i+1, len(format)-1)])
+			}
+			directive = ":z"
+			i++
+		}
+		layout, ok := dateDirectives[directive]
+		if !ok {
+			return "", fmt.Errorf("unsupported date directive %%%s", directive)
+		}
+		out.WriteString(layout)
+	}
+	return out.String(), nil
 }

@@ -56,18 +56,11 @@ type parquetPreparation struct {
 	baseline                   bool
 }
 
-type parquetRecords interface {
-	Next(context.Context) bool
-	RecordBatch() arrow.RecordBatch
-	Err() error
-	Release()
-}
-
 type parquetInput struct {
 	d               *Dataset
 	handle          storage.ReadAtCloser
 	file            *file.Reader
-	reader          parquetRecords
+	reader          *orderedParquetRecords
 	schema          *arrow.Schema
 	header          []string
 	values          []cell // reused row cells
@@ -119,16 +112,16 @@ func openParquet(ctx context.Context, d *Dataset, obj storage.Object, rows bool)
 		}
 	}()
 	prepared := d.parquet[obj.URI]
+	mode := storage.ReadVerified
 	switch {
 	case !rows && (d.plan || d.statisticsPending):
-		p.handle, err = d.store.OpenAtMetadata(ctx, obj)
+		mode = storage.ReadMetadata
 	case !rows:
-		p.handle, err = d.store.OpenAtMetadataVerified(ctx, obj)
+		mode = storage.ReadMetadataVerified
 	case prepared != nil && prepared.selective:
-		p.handle, err = d.store.OpenAtSelective(ctx, obj)
-	default:
-		p.handle, err = d.store.OpenAt(ctx, obj)
+		mode = storage.ReadSelective
 	}
+	p.handle, err = d.store.OpenAt(ctx, obj, mode)
 	if err != nil {
 		return nil, err
 	}
@@ -235,7 +228,7 @@ func openParquet(ctx context.Context, d *Dataset, obj storage.Object, rows bool)
 		}
 	}
 	if rows {
-		reader, openErr := newOrderedParquetRecords(ctx, p, obj.Size)
+		reader, openErr := newOrderedParquetRecords(ctx, p)
 		if openErr != nil {
 			return nil, openErr
 		}
@@ -310,19 +303,16 @@ func (p *parquetInput) next(ctx context.Context) (lexicalRecord, error) {
 		}
 		p.values = make([]cell, len(p.header))
 	}
-	var size int64
-	for i, name := range p.header {
-		column := p.record.Column(i)
-		size += int64(len(name)+parquetCellOverhead) + parquetValueWidth(column, p.row)
-		if size > p.d.recordLimit {
-			return lexicalRecord{}, errors.New("Parquet row exceeds max_record_bytes")
-		}
-		p.values[i] = parquetCell(column, p.row)
+	if err := validateParquetRowWidth(p.record, p.row, p.d.recordLimit); err != nil {
+		return lexicalRecord{}, err
+	}
+	for i := range p.header {
+		p.values[i] = parquetCell(p.record.Column(i), p.row)
 	}
 	p.row++
 	p.groupRow++
 	// The reject representation is encoded from names/values only when the
-	// row has an ingestion issue (lexicalRecord.rejectRaw).
+	// row has an ingestion issue (datasetReader.appendRecord).
 	return lexicalRecord{names: p.header, values: p.values}, nil
 }
 

@@ -20,23 +20,19 @@ type encoderAllocator struct {
 func newEncoderAllocator(budget *resource.Budget) *encoderAllocator {
 	return &encoderAllocator{base: budget.Allocator(), budget: budget, live: make(map[*byte][]byte)}
 }
-func (a *encoderAllocator) slot() {
-	if len(a.live) < a.slots {
-		return
-	}
-	slots := max(8, a.slots*2)
-	charge := int64(slots-a.slots) * allocationSlotCharge
-	if err := a.budget.Reserve(charge, "Parquet allocation tracking"); err != nil {
-		panic(err)
-	}
-	a.charge += charge
-	a.slots = slots
-}
 func (a *encoderAllocator) Allocate(size int) []byte {
 	if size == 0 {
 		return nil
 	}
-	a.slot()
+	if len(a.live) >= a.slots {
+		slots := max(8, a.slots*2)
+		charge := int64(slots-a.slots) * allocationSlotCharge
+		if err := a.budget.Reserve(charge, "Parquet allocation tracking"); err != nil {
+			panic(err)
+		}
+		a.charge += charge
+		a.slots = slots
+	}
 	b := a.base.Allocate(size)
 	a.live[&b[0]] = b
 	return b

@@ -153,7 +153,7 @@ func Run(ctx context.Context, rt app.Runtime, args []string) (code int) {
 		return out.help()
 	}
 	preparsed := preparsePresentation(args)
-	out.log = newLogger(rt.Stderr, preparsed)
+	out.log = slog.New(diagnostics.NewHandler(rt.Stderr, preparsed.logFormat, logLevels[preparsed.logLevel], preparsed.recorder))
 	out.text = preparsed.logFormat == "text"
 	switch args[0] {
 	case "--version", "version":
@@ -264,7 +264,8 @@ func Run(ctx context.Context, rt app.Runtime, args []string) (code int) {
 		if summary.ManifestURI == "" {
 			return out.fail(ctx, fmt.Errorf("write summary: %w", err))
 		}
-		return out.committedFailure(err, summary.ManifestURI)
+		out.log.Error("presentation failed after terminal commit", "error", err, "manifest", summary.ManifestURI)
+		return ExitPresentation
 	}
 	if summary.Validation == data.ValidationFail || summary.Status == data.StatusSchemaRejected {
 		return ExitValidation
@@ -364,10 +365,6 @@ func (o *options) apply(cfg *config.Config) {
 
 var logLevels = map[string]slog.Level{"debug": slog.LevelDebug, "info": slog.LevelInfo, "warn": slog.LevelWarn, "error": slog.LevelError}
 
-func newLogger(stderr io.Writer, opts *options) *slog.Logger {
-	return slog.New(diagnostics.NewHandler(stderr, opts.logFormat, logLevels[opts.logLevel], opts.recorder))
-}
-
 // presenter owns every terminal write: stdout for help, plans and summaries;
 // stderr for diagnostics. With JSON logging, diagnostics are log records;
 // with text logging, a failed command also ends with a readable error.
@@ -406,15 +403,6 @@ func (p *presenter) explain() {
 	if hint != "" {
 		fmt.Fprintf(p.stderr, "valet: hint: %s\n", hint)
 	}
-}
-
-func (p *presenter) committedFailure(err error, manifest string) int {
-	if p.log != nil {
-		p.log.Error("presentation failed after terminal commit", "error", err, "manifest", manifest)
-	} else {
-		_, _ = fmt.Fprintf(p.stderr, "valet: terminal result committed at %s; presentation failed: %v\n", manifest, err)
-	}
-	return ExitPresentation
 }
 
 func (p *presenter) summary(summary *data.Summary, outputURI string, plain, stats bool) error {
@@ -529,4 +517,82 @@ func writeSummary(path string, summary *data.Summary) (err error) {
 		return errors.Join(err, rollbackErr)
 	}
 	return nil
+}
+
+// commandDiagnostics outlives application cleanup and stdout presentation. That
+// ordering makes an exit-3 event truthful about the already committed result.
+type commandDiagnostics struct {
+	recorder *diagnostics.Recorder
+	scope    string
+	config   *config.Config
+	summary  *data.Summary
+}
+
+func beginDiagnostics(ctx context.Context, rt app.Runtime, opts *options) (context.Context, app.Runtime, *commandDiagnostics, error) {
+	id, err := app.NewRunID()
+	if err != nil {
+		return ctx, rt, nil, err
+	}
+	recorder := diagnostics.New(opts.command)
+	recorder.SetRunID(id)
+	opts.recorder = recorder
+	rt.RunID = id
+	rt.Log = slog.New(diagnostics.NewHandler(rt.Stderr, opts.logFormat, logLevels[opts.logLevel], opts.recorder))
+	ctx = diagnostics.WithRecorder(ctx, recorder)
+	scope := data.ScopeData
+	if opts.command == "schema" {
+		scope = data.ScopeSchema
+	}
+	if opts.command == "plan" {
+		scope = data.ScopePlan
+	}
+	state := &commandDiagnostics{recorder: recorder, scope: scope}
+	rt.Log.InfoContext(ctx, "run started", "event", "run.started", "version", rt.Version)
+	return ctx, rt, state, nil
+}
+
+func (d *commandDiagnostics) finish(ctx context.Context, code int) {
+	if d == nil {
+		return
+	}
+	defer d.recorder.Close()
+	terminal := diagnostics.Terminal{ExitCode: code, Scope: d.scope, CountersComplete: code == ExitOK || code == ExitValidation, Outcome: "completed"}
+	if d.config != nil {
+		terminal.OutputMode = d.config.Output.Mode
+		terminal.TrustPolicy = "none"
+		if d.config.Input.Parquet.Statistics == "trusted" {
+			terminal.TrustPolicy = "producer_statistics"
+		}
+	}
+	if s := d.summary; s != nil {
+		terminal.ManifestCommitted = s.ManifestURI != ""
+		terminal.OutputMode = s.OutputMode
+		terminal.TrustPolicy = s.TrustPolicy
+		terminal.ValueRows = s.Coverage.ValueRows
+		terminal.MetadataClaimedRows = s.Coverage.MetadataClaimedRows
+		terminal.AccountedRows = s.Coverage.AccountedRows
+		terminal.RowsScanned = s.RowsScanned
+		terminal.RowGroupsScanned = counterValue(s.Coverage.RowGroupsScanned)
+		terminal.RowGroupsStatisticsOnly = counterValue(s.Coverage.RowGroupsStatisticsOnly)
+		terminal.RowGroupsTotal = counterValue(s.Coverage.RowGroupsTotal)
+	}
+	switch {
+	case code == ExitPresentation && terminal.ManifestCommitted:
+		terminal.Outcome = "committed_presentation_failed"
+		terminal.CountersComplete = true
+	case code == ExitValidation:
+		terminal.Outcome = "validation_failed"
+	case code >= 128:
+		terminal.Outcome = "canceled"
+	case code != ExitOK:
+		terminal.Outcome = "failed"
+	}
+	d.recorder.Finish(ctx, terminal)
+}
+
+func counterValue(n *uint64) uint64 {
+	if n == nil {
+		return 0
+	}
+	return *n
 }

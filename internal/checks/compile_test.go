@@ -26,10 +26,10 @@ import (
 
 // compile opens the fixture dataset and compiles cfg against it; the program
 // is closed before the fixture's leak check runs.
-func compile(t *testing.T, files map[string]string, cfg *config.Config, options ...Option) (*Program, *source.Dataset) {
+func compile(t *testing.T, files map[string]string, cfg *config.Config, logger *slog.Logger, schemaIssueSink func(data.Issue) error) (*Program, *source.Dataset) {
 	t.Helper()
 	ds, store, budget := datasetFixture(t, files, cfg)
-	p, err := Compile(context.Background(), cfg, ds, store, budget, options...)
+	p, err := Compile(context.Background(), cfg, ds, store, budget, logger, schemaIssueSink)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ AbC
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			p, ds := compile(t, test.files, test.cfg)
+			p, ds := compile(t, test.files, test.cfg, nil, nil)
 			if got := scan(t, p, ds); !slices.Equal(got, test.want) {
 				t.Errorf("buckets = %v, want %v", got, test.want)
 			}
@@ -181,7 +181,7 @@ b
 a
 `,
 	}
-	p, ds := compile(t, files, cfg)
+	p, ds := compile(t, files, cfg, nil, nil)
 	if got := p.Summary().Passes; got != 1 {
 		t.Errorf("prepass passes = %d, want 1 (compatible rules share one index pass)", got)
 	}
@@ -227,7 +227,7 @@ func TestUniquenessFloatKeyPolicy(t *testing.T) {
 		Source: config.Source{URIs: []string{"x.parquet"}},
 		Rules:  []config.Rule{rule("UNIQUE", "is_unique", nil)},
 	}
-	p, ds := compile(t, map[string]string{"x.parquet": encoded.String()}, cfg)
+	p, ds := compile(t, map[string]string{"x.parquet": encoded.String()}, cfg, nil, nil)
 	if got, want := scan(t, p, ds), []string{"error", "error", "error", "error", "pass"}; !slices.Equal(got, want) {
 		t.Errorf("buckets = %v, want %v", got, want)
 	}
@@ -264,8 +264,7 @@ invalid
 `,
 	}
 	var issues []data.Issue
-	sink := WithSchemaIssueSink(func(i data.Issue) error { issues = append(issues, i); return nil })
-	p, _ := compile(t, files, cfg, sink)
+	p, _ := compile(t, files, cfg, nil, func(i data.Issue) error { issues = append(issues, i); return nil })
 	s := p.Summary()
 	type progress struct {
 		status             string
@@ -380,7 +379,7 @@ y
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			cfg := &config.Config{Source: config.Source{URIs: []string{"input.csv"}}, Rules: []config.Rule{test.rule}}
-			p, ds := compile(t, test.files, cfg)
+			p, ds := compile(t, test.files, cfg, nil, nil)
 			if got := p.Summary().Status; got != data.StatusCompleted {
 				t.Fatalf("status = %s, want %s", got, data.StatusCompleted)
 			}
@@ -439,7 +438,7 @@ func TestTypedReferenceUsesCanonicalText(t *testing.T) {
 		"dates.csv":   "key\n2026-01-31\n",
 		"ids.csv":     "key\n1\n",
 		"blobs.csv":   "key\nQQ==\n",
-	}, cfg)
+	}, cfg, nil, nil)
 	if got, want := scan(t, p, ds), []string{"pass", "error"}; !slices.Equal(got, want) {
 		t.Fatalf("buckets = %v, want %v", got, want)
 	}
@@ -504,7 +503,7 @@ b
 c
 `,
 	}
-	compile(t, files, cfg, WithLogger(logger))
+	compile(t, files, cfg, logger, nil)
 	counts := map[string]int{}
 	var reference map[string]any
 	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
@@ -547,7 +546,7 @@ func TestBudgetExhaustionIsTypedAndReleases(t *testing.T) {
 	}
 	ds, store, _ := datasetFixture(t, map[string]string{"input.csv": rows.String()}, cfg)
 	small := resource.New(64 << 10)
-	_, err := Compile(context.Background(), cfg, ds, store, small)
+	_, err := Compile(context.Background(), cfg, ds, store, small, nil, nil)
 	var limit *resource.ResourceLimitError
 	if !errors.As(err, &limit) {
 		t.Fatalf("compile error = %v, want a *resource.ResourceLimitError", err)
@@ -565,8 +564,7 @@ func TestSchemaIssueSinkFailureReleasesCompilerState(t *testing.T) {
 	ds, store, budget := datasetFixture(t, map[string]string{"a.csv": "x\nbad\n"}, cfg)
 	before := budget.Used()
 	sentinel := errors.New("sink failure")
-	failingSink := WithSchemaIssueSink(func(data.Issue) error { return sentinel })
-	_, err := Compile(context.Background(), cfg, ds, store, budget, failingSink)
+	_, err := Compile(context.Background(), cfg, ds, store, budget, nil, func(data.Issue) error { return sentinel })
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("compile error = %v, want %v", err, sentinel)
 	}
@@ -615,7 +613,7 @@ b
 `}
 	ds, store, budget := datasetFixture(t, files, cfg)
 	before := budget.Used()
-	p, err := Compile(context.Background(), cfg, ds, store, budget)
+	p, err := Compile(context.Background(), cfg, ds, store, budget, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

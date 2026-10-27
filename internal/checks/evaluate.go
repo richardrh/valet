@@ -2,6 +2,7 @@ package checks
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/richardrh/valet/internal/config"
 	"github.com/richardrh/valet/internal/data"
@@ -95,7 +96,8 @@ func (c *compiler) compileCondition(cc *config.Condition, depth int, nodes *int)
 		return nil, fmt.Errorf("condition must have exactly one leaf/composition")
 	}
 	for _, existing := range c.p.conditions {
-		if sameCondition(existing, out) {
+		if existing.kind == out.kind && existing.op == out.op && existing.column.index == out.column.index && existing.numeric == out.numeric && existing.value == out.value &&
+			slices.Equal(existing.values, out.values) && slices.Equal(existing.children, out.children) {
 			return existing, nil
 		}
 	}
@@ -293,8 +295,23 @@ func (p *Program) Evaluate(b *data.Batch) (*data.Result, error) {
 		}
 	}
 	p.bindBatch(b)
-	defer p.unbindBatch()
-	defer p.flushRuleCounts()
+	defer clear(p.columns)
+	// Fold the batch's per-rule counters into the summary maps, keeping map
+	// writes out of the per-row path.
+	defer func() {
+		for _, r := range p.rules {
+			if r.failed != 0 {
+				p.summary.RuleCounts[r.code] += r.failed
+			}
+			if r.unevaluable != 0 {
+				p.summary.Unevaluable[r.code] += r.unevaluable
+			}
+			if r.notApplicable != 0 {
+				p.summary.NotApplicable[r.code] += r.notApplicable
+			}
+			r.failed, r.unevaluable, r.notApplicable = 0, 0, 0
+		}
+	}()
 	n := int(b.Record.NumRows())
 	scratch, err := p.results.take(n)
 	if err != nil {
@@ -336,9 +353,11 @@ func (p *Program) Evaluate(b *data.Batch) (*data.Result, error) {
 					return nil, err
 				}
 			}
-			if err := incrementCount(p.summary.IngestCounts, issue.Code); err != nil {
-				return nil, err
+			next, err := data.CheckedAdd(p.summary.IngestCounts[issue.Code], 1)
+			if err != nil {
+				return nil, fmt.Errorf("counter %s: %w", issue.Code, err)
 			}
+			p.summary.IngestCounts[issue.Code] = next
 			bucket = data.BucketError
 			ingestCursor++
 		}
@@ -441,30 +460,4 @@ func (p *Program) evaluateRule(r *compiledRule, b *data.Batch, row int) (verdict
 		r.failed++
 	}
 	return out, failingColumn, nil
-}
-
-// flushRuleCounts folds the batch's per-rule counters into the summary maps,
-// keeping map writes out of the per-row path.
-func (p *Program) flushRuleCounts() {
-	for _, r := range p.rules {
-		if r.failed != 0 {
-			p.summary.RuleCounts[r.code] += r.failed
-		}
-		if r.unevaluable != 0 {
-			p.summary.Unevaluable[r.code] += r.unevaluable
-		}
-		if r.notApplicable != 0 {
-			p.summary.NotApplicable[r.code] += r.notApplicable
-		}
-		r.failed, r.unevaluable, r.notApplicable = 0, 0, 0
-	}
-}
-
-func incrementCount(counts map[string]uint64, code string) error {
-	next, err := data.CheckedAdd(counts[code], 1)
-	if err != nil {
-		return fmt.Errorf("counter %s: %w", code, err)
-	}
-	counts[code] = next
-	return nil
 }

@@ -30,7 +30,7 @@ func TestReferenceProjectionsShareValidatedSourceScan(t *testing.T) {
 	p, ds := compile(t, map[string]string{
 		"input.csv": "x,y\n001,alpha\nNULL,beta\n,empty\n001,beta\n",
 		"ref.csv":   "a,b\n001,alpha\nNULL,beta\n,empty\n",
-	}, cfg, WithLogger(logger))
+	}, cfg, logger, nil)
 	if got := scan(t, p, ds); !slices.Equal(got, []string{"pass", "pass", "pass", "error"}) {
 		t.Fatalf("projected membership buckets = %v", got)
 	}
@@ -73,7 +73,7 @@ func TestGroupedReferencesRejectMissingProjectionAndMalformedRows(t *testing.T) 
 		// until Close. Isolate compiler/reference-dataset scratch from that
 		// store-owned metadata so this assertion exercises failed-load cleanup.
 		compilerBudget := resource.New(128 << 20)
-		program, err := Compile(context.Background(), cfg, ds, store, compilerBudget)
+		program, err := Compile(context.Background(), cfg, ds, store, compilerBudget, nil, nil)
 		if program != nil {
 			program.Close()
 		}

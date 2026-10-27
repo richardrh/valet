@@ -18,10 +18,26 @@ import (
 	"github.com/richardrh/valet/internal/source"
 )
 
+// evaluator and batchWriter are the pass's only seams: *checks.Program and
+// *sink.Writer in production, and stage fakes in tests that need faults real
+// inputs cannot produce on demand. A nil batchWriter means report mode.
+type evaluator interface {
+	Summary() *data.Summary
+	Evaluate(*data.Batch) (*data.Result, error)
+	ApplyStatistics(*data.GroupEvidence) error
+}
+
+// WriteBatch is called in input order by one goroutine. It must finish using
+// borrowed batch/result data before returning, or retain its own accounted copy.
+type batchWriter interface {
+	WriteBatch(*data.Batch, *data.Result) error
+	WriteEvidence(*data.GroupEvidence) error
+}
+
 // validatePass keeps stateful evaluation on its caller and gives Next and
 // WriteBatch one owner each. Handoffs transfer ownership, not borrowed scratch.
 // Every stage is joined before the caller may close or publish anything.
-func validatePass(ctx context.Context, cancelRun context.CancelFunc, cfg *config.Config, reader source.Reader, program Program, writer Writer, budget *resource.Budget, log *slog.Logger) (int64, error) {
+func validatePass(ctx context.Context, cancelRun context.CancelFunc, cfg *config.Config, reader source.Reader, program evaluator, writer batchWriter, budget *resource.Budget, log *slog.Logger) (int64, error) {
 	inflight := cfg.Execution.Workers
 	// Leave space for builders, result growth, decoder workspaces and output.
 	// This is an admission bound, not a second charge for already-accounted
@@ -114,7 +130,9 @@ func validatePass(ctx context.Context, cancelRun context.CancelFunc, cfg *config
 				} else {
 					if pending.batch.Record != nil {
 						rows += pending.batch.Record.NumRows()
-						logValidated(ctx, log, debug, pending.batch, budget)
+						if debug {
+							log.DebugContext(ctx, "batch validated", "phase", "validation", "rows", pending.batch.Record.NumRows(), "bytes", util.TotalRecordSize(pending.batch.Record), "managed_bytes", budget.Used())
+						}
 					}
 				}
 			}
@@ -212,7 +230,8 @@ type passState struct {
 
 func (s *passState) fail(err error) {
 	s.mu.Lock()
-	if s.err == nil || (isCancellation(s.err) && !isCancellation(err)) {
+	canceled := errors.Is(s.err, context.Canceled) || errors.Is(s.err, context.DeadlineExceeded)
+	if s.err == nil || (canceled && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)) {
 		s.err = err
 	}
 	s.mu.Unlock()
@@ -236,11 +255,7 @@ func (s *passState) capture() {
 	s.cancel()
 }
 
-func isCancellation(err error) bool {
-	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
-}
-
-func validateSerial(ctx context.Context, cfg *config.Config, reader source.Reader, program Program, writer Writer, budget *resource.Budget, log *slog.Logger, debug bool) (int64, error) {
+func validateSerial(ctx context.Context, cfg *config.Config, reader source.Reader, program evaluator, writer batchWriter, budget *resource.Budget, log *slog.Logger, debug bool) (int64, error) {
 	var rows int64
 	for {
 		if err := ctx.Err(); err != nil {
@@ -254,7 +269,41 @@ func validateSerial(ctx context.Context, cfg *config.Config, reader source.Reade
 			}
 			return rows, fmt.Errorf("read validation input: %w", err)
 		}
-		count, err := validateSerialBatch(ctx, cfg, batch, program, writer, budget, log, debug)
+		// The closure scopes the releases to this batch, including on a
+		// recovered resource-limit panic.
+		count, err := func() (int64, error) {
+			defer batch.Release()
+			if err := applyGroupEvidence(program, batch); err != nil {
+				return 0, err
+			}
+			var result *data.Result
+			if batch.Record != nil {
+				evaluation := diagnostics.Start(ctx, diagnostics.Evaluate)
+				var err error
+				result, err = program.Evaluate(batch)
+				evaluation.End(err)
+				defer result.Release()
+				if err != nil {
+					return 0, fmt.Errorf("evaluate checks: %w", err)
+				}
+				diagnostics.AddRows(ctx, diagnostics.Evaluate, uint64(batch.Record.NumRows()))
+				if writer == nil {
+					if err := accountReportBatch(program.Summary(), batch, result); err != nil {
+						return 0, err
+					}
+				}
+			}
+			if err := writeEvaluatedBatch(ctx, cfg, writer, batch, result); err != nil {
+				return 0, fmt.Errorf("write output batch: %w", err)
+			}
+			if batch.Record == nil {
+				return 0, nil
+			}
+			if debug {
+				log.DebugContext(ctx, "batch validated", "phase", "validation", "rows", batch.Record.NumRows(), "bytes", util.TotalRecordSize(batch.Record), "managed_bytes", budget.Used())
+			}
+			return batch.Record.NumRows(), nil
+		}()
 		if err != nil {
 			return rows, err
 		}
@@ -262,40 +311,98 @@ func validateSerial(ctx context.Context, cfg *config.Config, reader source.Reade
 	}
 }
 
-func validateSerialBatch(ctx context.Context, cfg *config.Config, batch *data.Batch, program Program, writer Writer, budget *resource.Budget, log *slog.Logger, debug bool) (int64, error) {
-	defer batch.Release()
-	if err := applyGroupEvidence(program, batch); err != nil {
-		return 0, err
+// applyGroupEvidence mutates checks only on the evaluator owner. The writer
+// consumes the same event later in order and never retains its borrowed data.
+func applyGroupEvidence(program evaluator, batch *data.Batch) error {
+	if batch.Evidence == nil {
+		return nil
 	}
-	var result *data.Result
-	if batch.Record != nil {
-		evaluation := diagnostics.Start(ctx, diagnostics.Evaluate)
-		var err error
-		result, err = program.Evaluate(batch)
-		evaluation.End(err)
-		defer result.Release()
-		if err != nil {
-			return 0, fmt.Errorf("evaluate checks: %w", err)
-		}
-		diagnostics.AddRows(ctx, diagnostics.Evaluate, uint64(batch.Record.NumRows()))
-		if writer == nil {
-			if err := accountReportBatch(program.Summary(), batch, result); err != nil {
-				return 0, err
-			}
-		}
+	if err := program.ApplyStatistics(batch.Evidence); err != nil {
+		return fmt.Errorf("account Parquet group: %w", err)
 	}
-	if err := writeEvaluatedBatch(ctx, cfg, writer, batch, result); err != nil {
-		return 0, fmt.Errorf("write output batch: %w", err)
-	}
-	if batch.Record == nil {
-		return 0, nil
-	}
-	logValidated(ctx, log, debug, batch, budget)
-	return batch.Record.NumRows(), nil
+	return nil
 }
 
-func logValidated(ctx context.Context, log *slog.Logger, debug bool, batch *data.Batch, budget *resource.Budget) {
-	if debug {
-		log.DebugContext(ctx, "batch validated", "phase", "validation", "rows", batch.Record.NumRows(), "bytes", util.TotalRecordSize(batch.Record), "managed_bytes", budget.Used())
+func writeEvaluatedBatch(ctx context.Context, cfg *config.Config, writer batchWriter, batch *data.Batch, result *data.Result) error {
+	if writer == nil {
+		return nil
 	}
+	if batch.Evidence != nil && cfg.Input.Parquet.Statistics == "trusted" {
+		if err := writer.WriteEvidence(batch.Evidence); err != nil {
+			return fmt.Errorf("write Parquet evidence: %w", err)
+		}
+	}
+	if batch.Record == nil {
+		if batch.Evidence == nil {
+			return fmt.Errorf("input batch has neither values nor evidence")
+		}
+		return nil
+	}
+	return writer.WriteBatch(batch, result)
+}
+
+// accountReportBatch keeps only aggregate materialization counts on the evaluator
+// owner. It neither retains row diagnostics nor borrows any batch storage.
+func accountReportBatch(summary *data.Summary, batch *data.Batch, result *data.Result) error {
+	if batch.Record == nil {
+		return nil
+	}
+	n := int(batch.Record.NumRows())
+	if result == nil || len(result.Buckets) != n || len(batch.Locations) != n {
+		return errors.New("report row/provenance count mismatch")
+	}
+	if summary.RowOutput == nil {
+		summary.RowOutput = make(map[string]data.RowMaterialization, 4)
+	}
+	add := func(kind string, n uint64) error {
+		if n == 0 {
+			return nil
+		}
+		count := summary.RowOutput[kind]
+		var err error
+		count.Omitted, err = data.CheckedAdd(count.Omitted, n)
+		if err != nil {
+			return fmt.Errorf("report %s count: %w", kind, err)
+		}
+		count.Policy = "omit_by_policy"
+		summary.RowOutput[kind] = count
+		return nil
+	}
+	// Per-batch tallies keep map updates and map iteration out of the row loop.
+	states := make([][]data.State, 0, len(batch.States))
+	for _, column := range batch.States {
+		states = append(states, column)
+	}
+	var buckets [data.BucketError + 1]uint64
+	var rejects uint64
+	ingest := 0
+	for row, bucket := range result.Buckets {
+		if !bucket.Valid() {
+			return fmt.Errorf("unknown row bucket %v", bucket)
+		}
+		buckets[bucket]++
+		reject := false
+		for _, column := range states {
+			if row < len(column) && column[row] == data.Invalid {
+				reject = true
+				break
+			}
+		}
+		globalRow := batch.Locations[row].GlobalRow
+		for ingest < len(batch.Ingest) && batch.Ingest[ingest].GlobalRow <= globalRow {
+			if batch.Ingest[ingest].GlobalRow == globalRow {
+				reject = true
+			}
+			ingest++
+		}
+		if reject {
+			rejects++
+		}
+	}
+	for bucket, n := range buckets {
+		if err := add(data.Bucket(bucket).String(), n); err != nil {
+			return err
+		}
+	}
+	return add("rejects", rejects)
 }

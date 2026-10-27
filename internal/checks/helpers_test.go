@@ -100,7 +100,7 @@ func bindProgram(t *testing.T, cfg *config.Config, schema *arrow.Schema, budget 
 }
 
 func bindProgramErr(cfg *config.Config, schema *arrow.Schema, budget *resource.Budget) (*Program, error) {
-	p, _, err := newProgram(context.Background(), cfg, schema, budget, true, nil)
+	p, _, err := newProgram(context.Background(), cfg, schema, budget, true, nil, nil)
 	return p, err
 }
 
@@ -174,11 +174,11 @@ func datasetFixture(
 	}
 	cfg.Output.URI = filepath.Join(dir, "output")
 	budget := resource.New(128 << 20)
-	store, err := storage.New(context.Background(), config.S3{}, config.S3{}, budget)
+	store, err := storage.New(context.Background(), config.S3{}, config.S3{}, budget, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ds, err := source.New(context.Background(), cfg, store, budget)
+	ds, err := source.New(context.Background(), cfg, store, budget, nil, false)
 	if err != nil {
 		store.Close()
 		t.Fatal(err)

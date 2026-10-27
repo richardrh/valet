@@ -107,7 +107,7 @@ func engine(ctx context.Context, run engineRun) (m measurement, err error) {
 		}
 	}()
 	cfg := engineConfig(run)
-	store, err := storage.New(ctx, config.S3{}, config.S3{}, budget)
+	store, err := storage.New(ctx, config.S3{}, config.S3{}, budget, nil)
 	if err != nil {
 		return m, err
 	}
@@ -115,7 +115,7 @@ func engine(ctx context.Context, run engineRun) (m measurement, err error) {
 	ds := run.options.Dataset(budget)
 	defer ds.Close()
 	m.Schema = ds.Schema().String()
-	program, err := checks.Compile(ctx, cfg, ds, store, budget)
+	program, err := checks.Compile(ctx, cfg, ds, store, budget, nil, nil)
 	if err != nil {
 		return m, err
 	}

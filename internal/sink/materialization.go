@@ -176,18 +176,6 @@ func (w *Writer) reconcileSummary(summary *data.Summary) error {
 	return nil
 }
 
-func (w *Writer) countsFor(kind partKind) uint64 {
-	if kind.isRowKind() {
-		return w.counts[kind]
-	}
-	if kind == kindRejects {
-		return w.rejectsEmitted
-	}
-	// Ledger and issue counts are records, not logical rows. Each accepted line
-	// updates its family counter, independently of artifact finalization.
-	return w.ledgerCounts[kind]
-}
-
 func (w *Writer) manifest(summary *data.Summary, artifacts, summaryRef Reference) manifestDocument {
 	return manifestDocument{
 		ReportVersion: data.ReportVersion, RunID: w.runID, Status: summary.Status, Validation: summary.Validation,

@@ -44,8 +44,8 @@ even for argument failures, and `--log-level` the level. `-v`/`--verbose` is
 the same as `--log-level debug`.
 
 `app.Run` adds `run_id` with `Logger.With` and passes the logger to `storage`,
-`source`, `checks` and `sink` through their `WithLogger` options. Each defaults
-to a discard logger, so tests need no setup. Each lifecycle event is logged
+`source`, `checks` and `sink` as a plain constructor argument. A nil logger
+means a discard logger, so tests need no setup. Each lifecycle event is logged
 once, by the package that owns it: discovery, inference and the Parquet safety
 scan, compilation, prepass, reference index loads, passes, part and manifest
 publication, aborts, close failures and the budget peak. Per-batch detail is

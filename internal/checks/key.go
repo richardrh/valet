@@ -89,10 +89,6 @@ type keyIndex struct {
 	reserved int64
 }
 
-func newKeyIndex(budget *resource.Budget) *keyIndex {
-	return &keyIndex{values: make(map[string]uint8), budget: budget}
-}
-
 // add records key, copying it. With duplicates, a repeated key saturates at 2.
 func (k *keyIndex) add(key []byte, duplicates bool) error {
 	if n, ok := k.values[string(key)]; ok {
