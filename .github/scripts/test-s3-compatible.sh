@@ -41,10 +41,15 @@ if [[ "$backend" == minio ]]; then
   # Build the same immutable source used by the original MinIO gate, without
   # substituting an older third-party image. Scratch adds no moving base image.
   minio_version=v0.0.0-20250907161309-07c3a429bfed
-  GOBIN="$work/minio-build" CGO_ENABLED=0 go install "github.com/minio/minio@$minio_version"
-  cp "$(go env GOMODCACHE)/github.com/minio/minio@$minio_version/LICENSE" "$work/minio-build/LICENSE"
+  # MINIO_BUILD_DIR lets CI keep the build between runs; it is keyed on this
+  # script, so changing minio_version rebuilds.
+  minio_build="${MINIO_BUILD_DIR:-$work/minio-build}"
+  if [[ ! -x "$minio_build/minio" || ! -s "$minio_build/LICENSE" ]]; then
+    GOBIN="$minio_build" CGO_ENABLED=0 go install "github.com/minio/minio@$minio_version"
+    cp "$(go env GOMODCACHE)/github.com/minio/minio@$minio_version/LICENSE" "$minio_build/LICENSE"
+  fi
   image=localhost/valet-ci-minio:07c3a429bfed
-  "$runtime" build --file .github/containers/minio.Dockerfile --tag "$image" "$work/minio-build"
+  "$runtime" build --file .github/containers/minio.Dockerfile --tag "$image" "$minio_build"
   "$runtime" run --detach --name "$container" --cidfile "$work/container-id" \
     --publish "127.0.0.1:$port:9000" \
     --tmpfs /data:rw,mode=1777 --tmpfs /tmp:rw,mode=1777 \
@@ -64,16 +69,27 @@ curl --fail --silent --show-error --retry 30 --retry-delay 1 --retry-connrefused
   --retry-all-errors --max-time 5 "$VALET_S3_ENDPOINT$health"
 printf '\nTesting %s (%s) at %s\n' "$backend" "$image" "$VALET_S3_ENDPOINT"
 
-CGO_ENABLED=0 go build -trimpath -o "$work/valet" ./cmd/valet
-CGO_ENABLED=1 go build -race -trimpath -o "$work/valet-race" ./cmd/valet
+# VALET_S3_FLAVORS: release and/or race executables (default both).
+# VALET_S3_SELECTION: go test -run pattern (default: the S3, VM and stdout suites).
+# VALET_RELEASE_BINARY: reuse an already built release executable.
+flavors="${VALET_S3_FLAVORS:-release race}"
+selection="${VALET_S3_SELECTION:-^(TestE2E(14|15|16|17|18)S3|TestVM|TestStdout)}"
+if [[ -n "${VALET_RELEASE_BINARY:-}" ]]; then
+  cp "$VALET_RELEASE_BINARY" "$work/valet"
+else
+  CGO_ENABLED=0 go build -trimpath -o "$work/valet" ./cmd/valet
+fi
+if [[ " $flavors " == *" race "* ]]; then
+  CGO_ENABLED=1 go build -race -trimpath -o "$work/valet-race" ./cmd/valet
+fi
 # The AWS-only E2E-24 is deliberately excluded, not counted as a passing or
 # skipped compatibility case. Every selected test must execute on both servers.
-selection='^(TestE2E(14|15|16|17|18)S3|TestVM|TestStdout)'
-for flavor in release race; do
+for flavor in $flavors; do
   binary="$work/valet"
   if [[ "$flavor" == race ]]; then binary="$work/valet-race"; fi
   VALET_BINARY="$binary" GORACE='halt_on_error=1 atexit_sleep_ms=0' \
-    go test -count=1 -json -tags integration ./integration -run "$selection" -timeout 20m \
+    go test -count=1 -json -tags integration ./integration -run "$selection" \
+      -skip '^TestE2E24S3AWSIsolatedRun$' -timeout 20m \
     | tee "$logs/$flavor.jsonl"
   jq -es '
     any(.[]; .Action == "pass" and .Package != null and .Test == null)

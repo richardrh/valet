@@ -1,9 +1,19 @@
 name: CI
 
+# Two lanes:
+# - PR lane (every code PR): lint, race unit tests, and one CLI job that builds
+#   the release executable and runs the whole integration suite, including the
+#   S3 tests, against MinIO. Three Linux jobs in parallel.
+# - Full lane (main, releases, manual runs, and PRs labelled `full-ci`): adds
+#   arm64 and Windows, macOS cross-builds, RustFS, race-built CLIs and
+#   `go install`. Releases always run it.
+# `CI result` is the single required check.
+
 on:
   push:
-    branches: ['**']
+    branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
     inputs:
       run_scale:
@@ -20,23 +30,63 @@ on:
 permissions:
   contents: read
 
-
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Superseded PR runs are cancelled; main runs every merge so it can save caches.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CGO_ENABLED: '0'
+  # Releases stamp the tag; other builds stamp the commit.
+  VERSION: ${{ github.ref_type == 'tag' && github.ref_name || github.sha }}
 
 jobs:
-  quality:
+  changes:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    env:
-      CGO_ENABLED: '0'
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      # Docs-only PRs skip every Go job.
+      code: ${{ steps.filter.outputs.code || 'true' }}
+      full: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-ci') }}
+    steps:
+      - id: filter
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+        with:
+          predicate-quantifier: every
+          filters: |
+            code:
+              - '**'
+              - '!docs/content/**'
+              - '!docs/layouts/**'
+              - '!docs/assets/**'
+              - '!docs/hugo.yaml'
+              - '!docs/go.mod'
+              - '!docs/go.sum'
+              - '!docs/engineering/**'
+              - '!**/*.md'
+              - '!.github/workflows/docs.yml'
+
+  # ---------------------------------------------------------------- PR lane
+
+  lint:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          cache-dependency-path: go.sum
+          cache: false
+      - uses: ./.github/actions/go-cache
+        with:
+          name: lint
+          extra-path: ~/.cache/staticcheck
       - name: Verify modules
         run: go mod verify
       - name: Check formatting
@@ -50,27 +100,239 @@ jobs:
         run: go vet ./...
       - name: Staticcheck
         run: go run honnef.co/go/tools/cmd/staticcheck@2026.2.2 ./...
-      - name: Race tests
-        env:
-          CGO_ENABLED: '1'
-        run: go test -race ./internal/...
       - name: Scan reachable dependency vulnerabilities
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
       - name: Validate GitHub workflows
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -shellcheck= .github/workflows/*.yml
+      - uses: ./.github/actions/go-cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with:
+          name: lint
+          extra-path: ~/.cache/staticcheck
+          save: 'true'
 
-  go-install:
-    needs: quality
+  test:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    env:
-      CGO_ENABLED: '0'
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          cache-dependency-path: go.sum
+          cache: false
+      - uses: ./.github/actions/go-cache
+        with:
+          name: test
+      - name: Race unit tests
+        env:
+          CGO_ENABLED: '1'
+        run: go test -race ./...
+      - uses: ./.github/actions/go-cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with:
+          name: test
+          save: 'true'
+
+  cli:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: ./.github/actions/go-cache
+        with:
+          name: cli
+      - name: Cache MinIO server build
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/minio-build
+          # The S3 script pins the MinIO commit; go.mod pins the Go toolchain.
+          key: minio-${{ hashFiles('.github/scripts/test-s3-compatible.sh', 'go.mod') }}
+      - name: Build release executable
+        run: go build -trimpath -ldflags="-s -w -X main.version=$VERSION" -o dist/valet ./cmd/valet
+      - name: Release executable reports stamped version
+        run: test "$(./dist/valet --version)" = "valet $VERSION"
+      - name: Integration suite, including S3, against MinIO
+        env:
+          CONTAINER_RUNTIME: docker
+          MINIO_BUILD_DIR: ${{ runner.temp }}/minio-build
+          VALET_RELEASE_BINARY: ${{ github.workspace }}/dist/valet
+          VALET_S3_FLAVORS: release
+          VALET_S3_SELECTION: .
+          VALET_S3_LOG_DIR: ${{ runner.temp }}/s3-minio
+          TMPDIR: ${{ runner.temp }}
+        run: bash .github/scripts/test-s3-compatible.sh minio
+      - name: Upload test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-minio
+          path: ${{ runner.temp }}/s3-minio/
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@v4
+        with:
+          name: valet-linux-amd64
+          path: dist/valet
+          if-no-files-found: error
+      - uses: ./.github/actions/go-cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with:
+          name: cli
+          save: 'true'
+
+  # -------------------------------------------------------------- full lane
+
+  native:
+    needs: changes
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.full == 'true'
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04-arm
+            target: linux-arm64
+            executable: valet
+          - runner: windows-2025
+            target: windows-amd64
+            executable: valet.exe
+    name: native (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: ./.github/actions/go-cache
+        with:
+          name: native-${{ matrix.target }}
+      - name: Unit tests
+        run: go test ./...
+      - name: Build release executable
+        run: go build -trimpath -ldflags="-s -w -X main.version=$VERSION" -o 'dist/${{ matrix.executable }}' ./cmd/valet
+      - name: Release executable reports stamped version
+        run: test "$('./dist/${{ matrix.executable }}' --version | tr -d '\r')" = "valet $VERSION"
+      - name: Integration suite against the release executable
+        # -count=1: Go's test cache does not see the external executable.
+        run: VALET_BINARY="$PWD/dist/${{ matrix.executable }}" go test -count=1 -tags integration ./integration
+      - uses: actions/upload-artifact@v4
+        with:
+          name: valet-${{ matrix.target }}
+          path: dist/${{ matrix.executable }}
+          if-no-files-found: error
+      - uses: ./.github/actions/go-cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with:
+          name: native-${{ matrix.target }}
+          save: 'true'
+
+  darwin:
+    needs: changes
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.full == 'true'
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        goarch: [amd64, arm64]
+    name: darwin (${{ matrix.goarch }}, cross-built)
+    runs-on: ubuntu-24.04
+    env:
+      GOOS: darwin
+      GOARCH: ${{ matrix.goarch }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: ./.github/actions/go-cache
+        with:
+          name: darwin-${{ matrix.goarch }}
+      - name: Cross-build executable (not run; no macOS runner)
+        run: go build -trimpath -ldflags="-s -w -X main.version=$VERSION" -o dist/valet ./cmd/valet
+      - name: Compile darwin test binaries
+        run: go test -tags integration -run '^$' -exec true ./...
+      - uses: actions/upload-artifact@v4
+        with:
+          name: valet-darwin-${{ matrix.goarch }}
+          path: dist/valet
+          if-no-files-found: error
+      - uses: ./.github/actions/go-cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with:
+          name: darwin-${{ matrix.goarch }}
+          save: 'true'
+
+  s3:
+    needs: changes
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.full == 'true'
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [minio, rustfs]
+    name: s3 (${{ matrix.backend }}, release + race)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: ./.github/actions/go-cache
+        with:
+          name: s3-${{ matrix.backend }}
+      - name: Cache MinIO server build
+        if: matrix.backend == 'minio'
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/minio-build
+          key: minio-${{ hashFiles('.github/scripts/test-s3-compatible.sh', 'go.mod') }}
+      - name: Release and race CLI acceptance against the server
+        env:
+          CONTAINER_RUNTIME: docker
+          MINIO_BUILD_DIR: ${{ runner.temp }}/minio-build
+          VALET_S3_LOG_DIR: ${{ runner.temp }}/s3-${{ matrix.backend }}
+          TMPDIR: ${{ runner.temp }}
+        run: bash .github/scripts/test-s3-compatible.sh '${{ matrix.backend }}'
+      - name: Upload backend acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: s3-compatibility-${{ matrix.backend }}
+          path: ${{ runner.temp }}/s3-${{ matrix.backend }}/
+          if-no-files-found: warn
+      - uses: ./.github/actions/go-cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with:
+          name: s3-${{ matrix.backend }}
+          save: 'true'
+
+  go-install:
+    needs: changes
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.full == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: ./.github/actions/go-cache
+        with:
+          name: go-install
       - name: Install checkout
         env:
           GOBIN: ${{ runner.temp }}/valet-checkout
@@ -90,128 +352,28 @@ jobs:
         env:
           VALET_BINARY: ${{ runner.temp }}/valet-module/valet
         run: go test -count=1 -tags integration ./integration -run '^TestStdout' -timeout 5m
-
-  verify:
-    needs: quality
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: ubuntu-24.04
-            target: linux-amd64
-            executable: valet
-          - runner: ubuntu-24.04-arm
-            target: linux-arm64
-            executable: valet
-          - runner: windows-2025
-            target: windows-amd64
-            executable: valet.exe
-    runs-on: ${{ matrix.runner }}
-    defaults:
-      run:
-        shell: bash
-    env:
-      CGO_ENABLED: '0'
-      VERSION: ${{ github.ref_type == 'tag' && github.ref_name || github.sha }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: ./.github/actions/go-cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
-      - name: Unit tests
-        run: go test ./...
-      - name: Build self-contained CLI
-        run: go build -trimpath -ldflags="-s -w -X main.version=$VERSION" -o 'dist/${{ matrix.executable }}' ./cmd/valet
-      - name: Release executable reports stamped version
-        run: test "$('./dist/${{ matrix.executable }}' --version | tr -d '\r')" = "valet $VERSION"
-      - name: CLI acceptance scenarios against release executable
-        run: VALET_BINARY="$PWD/dist/${{ matrix.executable }}" go test -tags integration ./integration
-      - uses: actions/upload-artifact@v4
-        with:
-          name: valet-${{ matrix.target }}
-          path: dist/${{ matrix.executable }}
-          if-no-files-found: error
-
-  darwin-cross-build:
-    needs: quality
-    strategy:
-      fail-fast: false
-      matrix:
-        goarch: [amd64, arm64]
-    runs-on: ubuntu-24.04
-    defaults:
-      run:
-        shell: bash
-    env:
-      CGO_ENABLED: '0'
-      GOOS: darwin
-      GOARCH: ${{ matrix.goarch }}
-      VERSION: ${{ github.ref_type == 'tag' && github.ref_name || github.sha }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
-      - name: Cross-build CLI (not executed; no macOS runner)
-        run: go build -trimpath -ldflags="-s -w -X main.version=$VERSION" -o dist/valet ./cmd/valet
-      - name: Compile darwin test binaries
-        run: go test -tags integration -run '^$' -exec true ./...
-      - uses: actions/upload-artifact@v4
-        with:
-          name: valet-darwin-${{ matrix.goarch }}
-          path: dist/valet
-          if-no-files-found: error
-
-  s3-compatible:
-    name: s3-compatible (${{ matrix.backend }})
-    needs: quality
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        backend: [minio, rustfs]
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
-      - name: Real release and race CLI acceptance against container
-        env:
-          BACKEND: ${{ matrix.backend }}
-          CONTAINER_RUNTIME: docker
-          VALET_S3_LOG_DIR: ${{ runner.temp }}/s3-${{ matrix.backend }}
-          TMPDIR: ${{ runner.temp }}
-        run: bash .github/scripts/test-s3-compatible.sh "$BACKEND"
-      - name: Upload backend acceptance evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: s3-compatibility-${{ matrix.backend }}
-          path: ${{ runner.temp }}/s3-${{ matrix.backend }}/
-          if-no-files-found: warn
+          name: go-install
+          save: 'true'
 
   generated-scale:
-    needs: quality
+    needs: changes
     if: github.event_name == 'workflow_dispatch' && inputs.run_scale
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
-      CGO_ENABLED: '0'
       VALET_SCALE_ARTIFACT: scale-result.json
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          cache-dependency-path: go.sum
+          cache: false
+      - uses: ./.github/actions/go-cache
+        with:
+          name: scale
       - name: Generated Arrow scale acceptance
         run: go test -tags=scale ./benchmarks -run '^TestScale100GiB$' -timeout 0 -v
       - uses: actions/upload-artifact@v4
@@ -219,3 +381,27 @@ jobs:
         with:
           name: generated-scale-result
           path: benchmarks/scale-result.json
+
+  # ------------------------------------------------------------ the gate
+
+  ci-result:
+    name: CI result
+    if: always()
+    needs: [changes, lint, test, cli, native, darwin, s3, go-install]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Every job that had to run passed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          CODE: ${{ needs.changes.outputs.code }}
+          FULL: ${{ needs.changes.outputs.full }}
+        run: |
+          printf '%s\n' "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          printf '%s\n' "$NEEDS" | jq -e --arg code "$CODE" --arg full "$FULL" '
+            ["native", "darwin", "s3", "go-install"] as $fullOnly
+            | .changes.result == "success"
+            and (del(.changes) | to_entries | all(
+                .value.result == "success"
+                or (.value.result == "skipped"
+                    and ($code != "true" or ($full != "true" and (.key as $k | $fullOnly | index($k)))))))'
