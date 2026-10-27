@@ -7,7 +7,7 @@
       "code": "RECORD_ID_REQUIRED",
       "name": "Record ID must not be null",
       "column": "record_id",
-      "checks": [{"type": "not_null"}],
+      "checks": {"not_null": true},
       "level": "error",
       "message": "record_id is required"
     },
@@ -15,7 +15,7 @@
       "code": "AMOUNT_RANGE",
       "name": "Amount should be reasonable",
       "column": "amount",
-      "checks": [{"type": "valid_range", "min": 0, "max": 10000000}],
+      "checks": {"valid_range": {"min": 0, "max": 10000000}},
       "level": "error",
       "message": "amount must be between 0 and 10,000,000"
     },
@@ -23,14 +23,14 @@
       "code": "LOCATION_REQUIRED",
       "name": "Location is required",
       "column": "location",
-      "checks": [{"type": "not_null"}],
+      "checks": {"not_null": true},
       "level": "warn"
     },
     {
       "code": "POSITIVE_AMOUNT",
       "name": "Amount must be positive",
       "column": "amount",
-      "checks": [{"type": "valid_range", "min": 0}],
+      "checks": {"valid_range": {"min": 0}},
       "level": "error",
       "message": "amount must be positive"
     }

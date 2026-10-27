@@ -20,6 +20,7 @@ const SchemaID = "https://richardrh.github.io/valet/schema/v1/pipeline.schema.js
 func JSONSchema() ([]byte, error) {
 	b := schemaBuilder{defs: map[string]any{
 		"check":     checkSchema(),
+		"check_map": checkMapSchema(),
 		"condition": conditionSchema(),
 		"scalar":    scalarSchema,
 		"type_name": typeEnum(),
@@ -66,7 +67,11 @@ var fieldSchemas = map[string]any{
 	"Schema.extra_fields":      enum("error", "ignore"),
 	"Column.type":              ref("type_name"),
 	"Rule.level":               enum("error", "warn"),
-	"DatasetRule.level":        enum("error", "warn"),
+	"Rule.checks": map[string]any{
+		"description": "Checks, as a mapping keyed by check name or a list of {type: ...} entries.",
+		"anyOf":       []any{ref("check_map"), map[string]any{"type": "array", "items": ref("check")}},
+	},
+	"DatasetRule.level": enum("error", "warn"),
 	"DatasetRule.metric": enum("row_count",
 		"missing_count", "null_count", "blank_count", "conversion_error_count",
 		"missing_fraction", "null_fraction", "blank_fraction", "conversion_error_fraction",
@@ -267,23 +272,36 @@ var checkParamOverrides = map[string]map[string]any{
 	"timestamp_window": {"min": map[string]any{"type": "string"}, "max": map[string]any{"type": "string"}},
 }
 
-func checkSchema() map[string]any {
+func checkNames() []string {
 	names := make([]string, 0, len(Checks))
 	for name := range Checks {
 		names = append(names, name)
 	}
 	slices.Sort(names)
+	return names
+}
+
+// checkArguments is the schema of each argument a check accepts.
+func checkArguments(name string) map[string]any {
+	props := map[string]any{}
+	for _, p := range Checks[name].Params {
+		if s, ok := checkParamOverrides[name][p]; ok {
+			props[p] = s
+		} else {
+			props[p] = checkParamSchemas[p]
+		}
+	}
+	return props
+}
+
+// checkSchema describes one entry of the list form: {type: name, ...arguments}.
+func checkSchema() map[string]any {
+	names := checkNames()
 	variants := make([]any, 0, len(names))
 	for _, name := range names {
 		spec := Checks[name]
-		props := map[string]any{"type": map[string]any{"const": name}}
-		for _, p := range spec.Params {
-			if s, ok := checkParamOverrides[name][p]; ok {
-				props[p] = s
-			} else {
-				props[p] = checkParamSchemas[p]
-			}
-		}
+		props := checkArguments(name)
+		props["type"] = map[string]any{"const": name}
 		variant := map[string]any{
 			"title":                name,
 			"description":          "A " + spec.Scope + "-scope check.",
@@ -305,6 +323,31 @@ func checkSchema() map[string]any {
 		},
 		"oneOf": variants,
 	}
+}
+
+// checkMapSchema describes the map form: each key is a check name; its value
+// is the arguments mapping, the check's shorthand argument, or true/null for a
+// check without arguments.
+func checkMapSchema() map[string]any {
+	props := map[string]any{}
+	for _, name := range checkNames() {
+		spec := Checks[name]
+		args := map[string]any{"type": "object", "properties": checkArguments(name), "additionalProperties": false}
+		if spec.Operands == OperandsColumns {
+			args["required"] = []string{"columns"}
+		}
+		forms := []any{args}
+		description := "A " + spec.Scope + "-scope check: its arguments as a mapping"
+		if spec.Shorthand != "" {
+			forms = append(forms, checkArguments(name)[spec.Shorthand])
+			description += ", or just its " + spec.Shorthand
+		} else {
+			forms = append(forms, map[string]any{"const": true}, map[string]any{"type": "null"})
+			description += ", or true when it needs none"
+		}
+		props[name] = map[string]any{"description": description + ".", "anyOf": forms}
+	}
+	return map[string]any{"type": "object", "properties": props, "additionalProperties": false}
 }
 
 func conditionSchema() map[string]any {

@@ -46,6 +46,9 @@ type CheckSpec struct {
 	Gate     bool
 	Scope    string
 	Operands CheckOperands
+	// Shorthand is the argument a non-mapping value sets in the map form of
+	// checks, as in `valid_values: [A, B]`; empty when the check has none.
+	Shorthand string
 }
 
 // AllowsWhen reports whether a rule using this check may carry a `when`
@@ -72,26 +75,26 @@ var Checks = func() map[string]CheckSpec {
 		{Name: "not_null", Params: with(), Scope: CheckScopeRow},
 		{Name: "not_blank", Params: with(), Scope: CheckScopeRow},
 		{Name: "is_present", Params: with(), Scope: CheckScopeRow},
-		{Name: "valid_length", Params: with("length"), Scope: CheckScopeRow},
-		{Name: "min_length", Params: with("min_length"), Scope: CheckScopeRow},
-		{Name: "max_length", Params: with("max_length"), Scope: CheckScopeRow},
+		{Name: "valid_length", Params: with("length"), Scope: CheckScopeRow, Shorthand: "length"},
+		{Name: "min_length", Params: with("min_length"), Scope: CheckScopeRow, Shorthand: "min_length"},
+		{Name: "max_length", Params: with("max_length"), Scope: CheckScopeRow, Shorthand: "max_length"},
 		{Name: "valid_range", Params: with("min", "max", "exclusive_min", "exclusive_max"), Scope: CheckScopeRow},
-		{Name: "equals", Params: with("value"), Scope: CheckScopeRow},
-		{Name: "not_equals", Params: with("value"), Scope: CheckScopeRow},
+		{Name: "equals", Params: with("value"), Scope: CheckScopeRow, Shorthand: "value"},
+		{Name: "not_equals", Params: with("value"), Scope: CheckScopeRow, Shorthand: "value"},
 		{Name: "all_equal", Params: []string{"columns", "value"}, Scope: CheckScopeRow, Operands: OperandsColumns},
-		{Name: "has_null_keys", Params: []string{"columns"}, Scope: CheckScopeRow, Operands: OperandsColumns},
-		{Name: "valid_values", Params: with("values"), Scope: CheckScopeRow},
-		{Name: "matches_pattern", Params: with("pattern"), Scope: CheckScopeRow},
+		{Name: "has_null_keys", Params: []string{"columns"}, Scope: CheckScopeRow, Operands: OperandsColumns, Shorthand: "columns"},
+		{Name: "valid_values", Params: with("values"), Scope: CheckScopeRow, Shorthand: "values"},
+		{Name: "matches_pattern", Params: with("pattern"), Scope: CheckScopeRow, Shorthand: "pattern"},
 		{Name: "is_unique", Params: with(), Scope: CheckScopeGlobal},
-		{Name: "is_unique_composite", Params: []string{"columns"}, Scope: CheckScopeGlobal, Operands: OperandsColumns},
+		{Name: "is_unique_composite", Params: []string{"columns"}, Scope: CheckScopeGlobal, Operands: OperandsColumns, Shorthand: "columns"},
 		{Name: "compare_columns", Params: []string{"column", "other_column", "operator"}, Scope: CheckScopeRow},
 		{Name: "referential_integrity", Params: []string{"column", "reference_file", "reference_column"}, Scope: CheckScopeReference},
 		{Name: "referential_integrity_composite", Params: []string{"columns", "reference_file", "reference_columns"}, Scope: CheckScopeReference, Operands: OperandsColumns},
-		{Name: "required_columns", Params: []string{"columns"}, Gate: true, Scope: CheckScopeSchema, Operands: OperandsColumns},
+		{Name: "required_columns", Params: []string{"columns"}, Gate: true, Scope: CheckScopeSchema, Operands: OperandsColumns, Shorthand: "columns"},
 		{Name: "schema_matches", Params: []string{"columns", "mode", "allow_extra_columns", "require_columns"}, Gate: true, Scope: CheckScopeSchema, Operands: OperandsNone},
 		{Name: "valid_schema_columns", Params: []string{"reference_file", "reference_column"}, Scope: CheckScopeSchema, Operands: OperandsNone},
-		{Name: "type_check", Params: with("expected_type"), Scope: CheckScopeRow},
-		{Name: "date_format", Params: with("format", "formats"), Scope: CheckScopeRow},
+		{Name: "type_check", Params: with("expected_type"), Scope: CheckScopeRow, Shorthand: "expected_type"},
+		{Name: "date_format", Params: with("format", "formats"), Scope: CheckScopeRow, Shorthand: "format"},
 		{Name: "timestamp_window", Params: with("min", "max", "timezone"), Scope: CheckScopeRow},
 	}
 	out := make(map[string]CheckSpec, len(specs))
