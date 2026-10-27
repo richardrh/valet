@@ -140,6 +140,12 @@ func TestExplain(t *testing.T) {
 			message: "execution.max_depth must be between 1 and 1024",
 		},
 		{
+			// Nothing to redact: text mentioning a scheme must stay verbatim.
+			name:    "public text mentioning a scheme",
+			err:     PublicError(errors.New("inputs must be files or s3:// objects, e.g. s3://bucket/key")),
+			message: "inputs must be files or s3:// objects, e.g. s3://bucket/key",
+		},
+		{
 			name:    "resource limit",
 			err:     fmt.Errorf("reserve: %w", &resource.ResourceLimitError{Phase: "CSV header", Limit: 64, Used: 60, Requested: 8}),
 			message: "memory budget of 64 bytes exceeded while reserving 8 bytes for CSV header (60 in use)",

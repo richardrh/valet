@@ -5,6 +5,21 @@ import (
 	"strings"
 )
 
+// Values of options that the command line can also set. Configuration
+// validation, the JSON Schema and the CLI flags all read these lists.
+var (
+	OutputModes               = []string{"all", "failures", "report"}
+	ParquetStatisticsPolicies = []string{"off", "trusted"}
+)
+
+// OrList renders allowed values as "a, b or c".
+func OrList(values []string) string {
+	if len(values) < 2 {
+		return strings.Join(values, "")
+	}
+	return strings.Join(values[:len(values)-1], ", ") + " or " + values[len(values)-1]
+}
+
 // typeSpellings maps every accepted (lower-case) schema/check type spelling to
 // its canonical name. Sized names follow C's fixed-width integers without
 // _t and Arrow/Parquet; bare names follow Python, so int and float are

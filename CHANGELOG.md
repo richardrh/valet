@@ -15,6 +15,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   none. The list form (`- type: ...`) keeps working, and the JSON Schema
   accepts both.
 
+### Changed
+
+- Each command accepts only its own flags. A flag from another command is
+  rejected with the flags this command takes, for example
+  `-o is not a schema option; schema accepts --pipeline, --input, ...`; an
+  unknown flag says `see valet --help`. `plan` no longer silently ignores
+  `--plain` and `--stats`. Invalid values name the allowed ones, for example
+  `--output-mode must be all, failures or report, not "some"`.
+
+### Fixed
+
+- Error messages that mention a URI scheme without credentials, such as
+  `s3:// objects`, are no longer rewritten to `s3: objects`.
+
 ## [0.1.0-rc.2] - 2026-10-26
 
 ### Added

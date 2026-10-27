@@ -118,9 +118,9 @@ func TestPipelineFormatIsAPlanOption(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"plan", "-p", pipeline, "--format", "text"}, "plan --format must be json or pipeline"},
-		{[]string{"schema", "-p", pipeline, "--format", "pipeline"}, "schema --format must be json or text"},
-		{[]string{"validate", "-p", pipeline, "--format", "pipeline"}, "--format is a plan and schema option"},
+		{[]string{"plan", "-p", pipeline, "--format", "text"}, `--format must be json or pipeline, not "text"`},
+		{[]string{"schema", "-p", pipeline, "--format", "pipeline"}, `--format must be json or text, not "pipeline"`},
+		{[]string{"validate", "-p", pipeline, "--format", "pipeline"}, "--format is not a validate option"},
 	} {
 		r := invoke(t, tc.args...)
 		if r.exit != ExitOperational || !strings.Contains(r.stderr, tc.want) {
