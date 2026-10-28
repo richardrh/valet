@@ -297,7 +297,11 @@ func redactURI(text string) string {
 	if err != nil {
 		return "[redacted URI]"
 	}
-	u.User, u.RawQuery, u.Fragment = nil, "", ""
+	if u.User == nil && u.RawQuery == "" && !u.ForceQuery && u.Fragment == "" && !strings.Contains(text, "#") {
+		// Nothing to remove; re-serialising would rewrite text such as "s3://".
+		return text
+	}
+	u.User, u.RawQuery, u.ForceQuery, u.Fragment = nil, "", false, ""
 	return u.String()
 }
 

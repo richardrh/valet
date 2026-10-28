@@ -140,14 +140,14 @@ func (c *Config) Validate() error {
 	if !oneOf(c.Input.Type, "csv", "parquet", "ndjson", "json") {
 		return fmt.Errorf("unsupported input.type %q", c.Input.Type)
 	}
-	if !oneOf(c.Input.Parquet.Statistics, "off", "trusted") {
-		return fmt.Errorf("input.parquet.statistics must be off or trusted")
+	if !oneOf(c.Input.Parquet.Statistics, ParquetStatisticsPolicies...) {
+		return fmt.Errorf("input.parquet.statistics must be %s", OrList(ParquetStatisticsPolicies))
 	}
 	if c.Input.Parquet.Statistics == "trusted" && c.Input.Type != "parquet" {
 		return fmt.Errorf("trusted input.parquet.statistics requires parquet input")
 	}
-	if !oneOf(c.Output.Mode, "all", "failures", "report") {
-		return fmt.Errorf("output.mode must be all, failures, or report")
+	if !oneOf(c.Output.Mode, OutputModes...) {
+		return fmt.Errorf("output.mode must be %s", OrList(OutputModes))
 	}
 	if !oneOf(c.Output.Parquet.Statistics, "none", "bounded") {
 		return fmt.Errorf("output.parquet.statistics must be none or bounded")
