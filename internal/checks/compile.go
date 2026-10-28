@@ -48,17 +48,6 @@ type compiledRule struct {
 	coverage                           bool
 }
 
-func newCompiledRule(spec config.Rule) *compiledRule {
-	r := &compiledRule{code: spec.Code, level: spec.Level, message: spec.Message, column: spec.Column}
-	if r.level == "" {
-		r.level = levelError
-	}
-	if r.message == "" {
-		r.message = r.code
-	}
-	return r
-}
-
 // schemaIssue is the schema-scope issue this rule reports for column.
 func (r *compiledRule) schemaIssue(column, reason string) data.Issue {
 	return data.Issue{Code: r.code, Severity: r.level, Origin: data.OriginRule, Scope: data.ScopeSchema, Column: column, Message: r.message, Reason: reason}
@@ -104,26 +93,6 @@ type RuleDescription struct {
 	NoOp   bool     `json:"no_op"`
 }
 
-// Option configures a Program. Options apply on every Compile path, including
-// programs rejected before binding.
-type Option func(*Program)
-
-// WithSchemaIssueSink streams each castability failure found by the prepass,
-// with its row location, instead of retaining row diagnostics.
-func WithSchemaIssueSink(sink func(data.Issue) error) Option {
-	return func(p *Program) { p.schemaIssueSink = sink }
-}
-
-// WithLogger sets the logger for compile, prepass and reference-load events.
-// The default discards.
-func WithLogger(logger *slog.Logger) Option {
-	return func(p *Program) {
-		if logger != nil {
-			p.logger = logger
-		}
-	}
-}
-
 func (p *Program) reserve(n int64, phase string) error {
 	if err := p.budget.Reserve(n, phase); err != nil {
 		return err
@@ -157,10 +126,13 @@ type compiler struct {
 }
 
 // newProgram reserves the compiled-state estimate and, with bind, compiles
-// rules, conditions and dataset metrics against schema.
-func newProgram(ctx context.Context, cfg *config.Config, schema *arrow.Schema, budget *resource.Budget, bind bool, options []Option) (*Program, *compiler, error) {
+// rules, conditions and dataset metrics against schema. A nil logger discards.
+func newProgram(ctx context.Context, cfg *config.Config, schema *arrow.Schema, budget *resource.Budget, bind bool, logger *slog.Logger, schemaIssueSink func(data.Issue) error) (*Program, *compiler, error) {
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
 	p := &Program{
-		ctx: ctx, budget: budget, logger: slog.New(slog.DiscardHandler),
+		ctx: ctx, budget: budget, logger: logger, schemaIssueSink: schemaIssueSink,
 		summary: data.NewSummary(), indexes: make(map[string]*keyIndex), metrics: make(map[string]*columnMetrics),
 		keys: keyBuffer{budget: budget},
 	}
@@ -178,13 +150,44 @@ func newProgram(ctx context.Context, cfg *config.Config, schema *arrow.Schema, b
 		p.summary.Coverage.RowGroupsTotal = new(uint64)
 	}
 	p.results.budget = budget
-	for _, option := range options {
-		option(p)
-	}
 	for _, spec := range cfg.DatasetRules {
 		p.datasetRules = append(p.datasetRules, datasetRule{spec: spec})
 	}
-	if err := p.reserve(compiledEstimate(cfg, schema, bind), "compiled checks"); err != nil {
+	estimate := int64(len(schema.Fields())+len(cfg.Rules)+1) * bytesPerCompiledItem
+	if bind {
+		items := len(schema.Fields()) + len(cfg.Rules) + len(cfg.DatasetRules) + len(cfg.Stats)
+		estimate = int64(items+1) * bytesPerCompiledItem
+		for _, rule := range cfg.Rules {
+			for _, check := range rule.Checks {
+				estimate += bytesPerCheckDefinition + int64(len(str(check.Params, "pattern")))*bytesPerPatternByte
+				if vals, ok := check.Params["values"].([]any); ok {
+					estimate += int64(len(vals)) * bytesPerLiteral
+				}
+				if check.Type == "date_format" {
+					chargeFormat := func(format string) {
+						const retainedCopies = 2 // derived context and compiled check
+						estimate += retainedCopies * (bytesPerDateFormat + int64(len(format))*bytesPerDateFormatByte)
+					}
+					if format := str(check.Params, "format"); format != "" {
+						chargeFormat(format)
+					}
+					switch values := check.Params["formats"].(type) {
+					case []any:
+						for _, value := range values {
+							if format, ok := value.(string); ok {
+								chargeFormat(format)
+							}
+						}
+					case []string:
+						for _, format := range values {
+							chargeFormat(format)
+						}
+					}
+				}
+			}
+		}
+	}
+	if err := p.reserve(estimate, "compiled checks"); err != nil {
 		return nil, nil, err
 	}
 	for _, rule := range cfg.Rules {
@@ -215,52 +218,16 @@ func newProgram(ctx context.Context, cfg *config.Config, schema *arrow.Schema, b
 	return p, c, nil
 }
 
-func compiledEstimate(cfg *config.Config, schema *arrow.Schema, bind bool) int64 {
-	items := len(schema.Fields())
-	if !bind {
-		return int64(items+len(cfg.Rules)+1) * bytesPerCompiledItem
-	}
-	items += len(cfg.Rules) + len(cfg.DatasetRules) + len(cfg.Stats)
-	estimate := int64(items+1) * bytesPerCompiledItem
-	for _, rule := range cfg.Rules {
-		for _, check := range rule.Checks {
-			estimate += bytesPerCheckDefinition + int64(len(str(check.Params, "pattern")))*bytesPerPatternByte
-			if vals, ok := check.Params["values"].([]any); ok {
-				estimate += int64(len(vals)) * bytesPerLiteral
-			}
-			if check.Type == "date_format" {
-				chargeFormat := func(format string) {
-					const retainedCopies = 2 // derived context and compiled check
-					estimate += retainedCopies * (bytesPerDateFormat + int64(len(format))*bytesPerDateFormatByte)
-				}
-				if format := str(check.Params, "format"); format != "" {
-					chargeFormat(format)
-				}
-				switch values := check.Params["formats"].(type) {
-				case []any:
-					for _, value := range values {
-						if format, ok := value.(string); ok {
-							chargeFormat(format)
-						}
-					}
-				case []string:
-					for _, format := range values {
-						chargeFormat(format)
-					}
-				}
-			}
-		}
-	}
-	return estimate
-}
-
 // Compile binds cfg to the dataset schema, rejects the schema through error
 // level gates, loads reference indexes and runs the uniqueness/castability
-// prepass when needed.
-func Compile(ctx context.Context, cfg *config.Config, ds *source.Dataset, store *storage.Store, budget *resource.Budget, options ...Option) (*Program, error) {
+// prepass when needed. A nil logger discards compile, prepass and
+// reference-load events. A non-nil schemaIssueSink streams each castability
+// failure found by the prepass, with its row location, instead of retaining
+// row diagnostics.
+func Compile(ctx context.Context, cfg *config.Config, ds *source.Dataset, store *storage.Store, budget *resource.Budget, logger *slog.Logger, schemaIssueSink func(data.Issue) error) (*Program, error) {
 	start := time.Now()
 	ingestIssues := ds.SchemaIssues()
-	p, c, err := newProgram(ctx, cfg, ds.Schema(), budget, len(ingestIssues) == 0, options)
+	p, c, err := newProgram(ctx, cfg, ds.Schema(), budget, len(ingestIssues) == 0, logger, schemaIssueSink)
 	if err != nil {
 		return nil, err
 	}
@@ -296,7 +263,7 @@ func since(t time.Time) int64 { return time.Since(t).Milliseconds() }
 // reading rows or reference inputs.
 func Describe(ctx context.Context, cfg *config.Config, ds *source.Dataset, store *storage.Store, budget *resource.Budget) (*Description, error) {
 	ingestIssues := ds.SchemaIssues()
-	p, _, err := newProgram(ctx, cfg, ds.Schema(), budget, len(ingestIssues) == 0, nil)
+	p, _, err := newProgram(ctx, cfg, ds.Schema(), budget, len(ingestIssues) == 0, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -424,7 +391,13 @@ func (c *compiler) bind() error {
 	// failing unrelated rules.
 	rules := make([]*compiledRule, len(c.cfg.Rules))
 	for ri, spec := range c.cfg.Rules {
-		rules[ri] = newCompiledRule(spec)
+		rules[ri] = &compiledRule{code: spec.Code, level: spec.Level, message: spec.Message, column: spec.Column}
+		if rules[ri].level == "" {
+			rules[ri].level = levelError
+		}
+		if rules[ri].message == "" {
+			rules[ri].message = rules[ri].code
+		}
 		if rules[ri].level != levelError {
 			continue
 		}
@@ -495,7 +468,7 @@ func (c *compiler) compileCheck(r *compiledRule, def config.Check) ([]*compiledC
 	if !ok {
 		return nil, fmt.Errorf("unknown check %q", def.Type)
 	}
-	d := &checkDef{kind: kind, null: kindDefs[kind].null, rule: r, params: def.Params}
+	d := &checkDef{kind: kind, rule: r, params: def.Params}
 	if kind.spec().Operands != config.OperandsNone {
 		names, err := operandNames(def.Params, r.column)
 		if err != nil {
@@ -609,7 +582,7 @@ func (p *Program) prepass(ctx context.Context, ds *source.Dataset) (err error) {
 				idx := p.indexes[name]
 				if idx == nil {
 					// Compatible checks share one index fed by the first.
-					idx = newKeyIndex(p.budget)
+					idx = &keyIndex{values: make(map[string]uint8), budget: p.budget}
 					p.indexes[name] = idx
 					feeders = append(feeders, c)
 				}
@@ -635,7 +608,50 @@ func (p *Program) prepass(ctx context.Context, ds *source.Dataset) (err error) {
 		if err != nil {
 			return err
 		}
-		err = func() error { defer b.Release(); return p.accumulatePrepass(b, castable, feeders) }()
+		err = func() error {
+			defer b.Release()
+			p.bindBatch(b)
+			defer clear(p.columns)
+			rows, err := data.CheckedAdd(p.summary.RowsScanned, uint64(b.Record.NumRows()))
+			if err != nil {
+				return err
+			}
+			p.summary.RowsScanned = rows
+			diagnostics.AddRows(p.ctx, diagnostics.Prepass, uint64(b.Record.NumRows()))
+			for row := range int(b.Record.NumRows()) {
+				for _, s := range castable {
+					for i, col := range s.columns {
+						state := col.state(row)
+						if state != data.Invalid && (state != data.Valid || typeValid(col.value(row), s.types[i])) {
+							continue
+						}
+						s.outcome = true
+						s.failures[i]++
+						if p.schemaIssueSink != nil {
+							issue := s.rule.schemaIssue(col.name, reasonUncastableValue)
+							if row < len(b.Locations) {
+								issue.Location = b.Locations[row]
+							}
+							if err := p.schemaIssueSink(issue); err != nil {
+								return err
+							}
+						}
+					}
+				}
+				for _, u := range feeders {
+					key, status, err := p.valueKey(b, u.columns, row)
+					if err != nil {
+						return err
+					}
+					if status == keyBuilt {
+						if err = u.index.add(key, true); err != nil {
+							return err
+						}
+					}
+				}
+			}
+			return nil
+		}()
 		if err != nil {
 			return err
 		}
@@ -645,50 +661,6 @@ func (p *Program) prepass(ctx context.Context, ds *source.Dataset) (err error) {
 		return err
 	}
 	p.logger.Info("prepass complete", "phase", "prepass", "rows", p.summary.RowsScanned-rows, "duration_ms", since(start))
-	return nil
-}
-
-func (p *Program) accumulatePrepass(b *data.Batch, castable []*schemaCheck, feeders []*uniqueCheck) error {
-	p.bindBatch(b)
-	defer p.unbindBatch()
-	rows, err := data.CheckedAdd(p.summary.RowsScanned, uint64(b.Record.NumRows()))
-	if err != nil {
-		return err
-	}
-	p.summary.RowsScanned = rows
-	diagnostics.AddRows(p.ctx, diagnostics.Prepass, uint64(b.Record.NumRows()))
-	for row := range int(b.Record.NumRows()) {
-		for _, s := range castable {
-			for i, col := range s.columns {
-				state := col.state(row)
-				if state != data.Invalid && (state != data.Valid || typeValid(col.value(row), s.types[i])) {
-					continue
-				}
-				s.outcome = true
-				s.failures[i]++
-				if p.schemaIssueSink != nil {
-					issue := s.rule.schemaIssue(col.name, reasonUncastableValue)
-					if row < len(b.Locations) {
-						issue.Location = b.Locations[row]
-					}
-					if err := p.schemaIssueSink(issue); err != nil {
-						return err
-					}
-				}
-			}
-		}
-		for _, u := range feeders {
-			key, status, err := p.valueKey(b, u.columns, row)
-			if err != nil {
-				return err
-			}
-			if status == keyBuilt {
-				if err = u.index.add(key, true); err != nil {
-					return err
-				}
-			}
-		}
-	}
 	return nil
 }
 
@@ -712,7 +684,7 @@ func (c *compiler) loadReferences(ctx context.Context, store *storage.Store) err
 			name := ref.indexName()
 			idx := p.indexes[name]
 			if idx == nil {
-				idx = newKeyIndex(p.budget)
+				idx = &keyIndex{values: make(map[string]uint8), budget: p.budget}
 				p.indexes[name] = idx
 				group := byURI[ref.uri]
 				if group == nil {
@@ -735,7 +707,32 @@ func (c *compiler) loadReferences(ctx context.Context, store *storage.Store) err
 		}
 	}
 	for _, group := range groups {
-		if err := c.loadReference(ctx, store, group); err != nil {
+		err := func() (err error) {
+			start := time.Now()
+			span := diagnostics.Start(ctx, diagnostics.Reference)
+			defer func() { span.End(err) }()
+			ds, err := source.New(ctx, c.cfg.ForReference(group.uri, group.columns), store, c.p.budget, c.p.logger, false)
+			if err != nil {
+				return fmt.Errorf("reference input: %w", err)
+			}
+			defer func() {
+				if closeErr := ds.Close(); err == nil {
+					err = closeErr
+				}
+			}()
+			rows, err := c.p.readReference(ctx, ds, group)
+			if err != nil {
+				return err
+			}
+			diagnostics.AddRows(ctx, diagnostics.Reference, rows)
+			var reserved int64
+			for _, ref := range group.refs {
+				reserved += ref.index.reserved
+			}
+			c.p.logger.Info("reference index loaded", "phase", "reference", "source", storage.LogURI(group.uri), "projections", len(group.refs), "rows", rows, "bytes", reserved, "duration_ms", since(start))
+			return nil
+		}()
+		if err != nil {
 			return err
 		}
 	}
@@ -762,32 +759,6 @@ type referenceGroup struct {
 	uri     string
 	columns []string
 	refs    []*referenceSource
-}
-
-func (c *compiler) loadReference(ctx context.Context, store *storage.Store, group *referenceGroup) (err error) {
-	start := time.Now()
-	span := diagnostics.Start(ctx, diagnostics.Reference)
-	defer func() { span.End(err) }()
-	ds, err := source.New(ctx, c.cfg.ForReference(group.uri, group.columns), store, c.p.budget, source.WithLogger(c.p.logger))
-	if err != nil {
-		return fmt.Errorf("reference input: %w", err)
-	}
-	defer func() {
-		if closeErr := ds.Close(); err == nil {
-			err = closeErr
-		}
-	}()
-	rows, err := c.p.readReference(ctx, ds, group)
-	if err != nil {
-		return err
-	}
-	diagnostics.AddRows(ctx, diagnostics.Reference, rows)
-	var reserved int64
-	for _, ref := range group.refs {
-		reserved += ref.index.reserved
-	}
-	c.p.logger.Info("reference index loaded", "phase", "reference", "source", storage.LogURI(group.uri), "projections", len(group.refs), "rows", rows, "bytes", reserved, "duration_ms", since(start))
-	return nil
 }
 
 func (p *Program) readReference(ctx context.Context, ds *source.Dataset, group *referenceGroup) (rows uint64, err error) {
@@ -859,4 +830,83 @@ func (p *Program) readReference(ctx context.Context, ds *source.Dataset, group *
 			return rows, err
 		}
 	}
+}
+
+// columnContext is the comparison domain declared for a schema-less column by
+// type_check, date_format or schema_matches.
+type columnContext struct {
+	typ string
+	// conflict marks incompatible declarations; the column then compares in
+	// neither the numeric nor the temporal domain.
+	conflict bool
+}
+
+// contextType returns the declared type ("" when conflicting) and whether the
+// column has any declaration.
+func (c *compiler) contextType(name string) (string, bool) {
+	ctx, ok := c.types[name]
+	if ctx.conflict {
+		return "", ok
+	}
+	return ctx.typ, ok
+}
+
+func (c *compiler) deriveContexts() error {
+	c.types = make(map[string]columnContext)
+	c.dateFormats = make(map[string][]string)
+	record := func(name, typ string) {
+		typ = typeName(typ)
+		old, ok := c.types[name]
+		switch {
+		case !ok || (!old.conflict && old.typ == typ):
+			c.types[name] = columnContext{typ: typ}
+		case old.conflict:
+		case !isNumericType(old.typ) || !isNumericType(typ):
+			c.types[name] = columnContext{conflict: true}
+		}
+	}
+	for _, rule := range c.cfg.Rules {
+		for _, check := range rule.Checks {
+			if check.Type == "schema_matches" {
+				switch cols := check.Params["columns"].(type) {
+				case map[string]any:
+					for name, typ := range cols {
+						if t, ok := typ.(string); ok {
+							record(name, t)
+						}
+					}
+				case map[string]string:
+					for name, t := range cols {
+						record(name, t)
+					}
+				}
+				continue
+			}
+			if check.Type != "type_check" && check.Type != "date_format" {
+				continue
+			}
+			names, err := operandNames(check.Params, rule.Column)
+			if err != nil {
+				return fmt.Errorf("rule %s: %w", rule.Code, err)
+			}
+			var layouts []string
+			if check.Type == "date_format" {
+				layouts, err = dateLayoutsParam(check.Params)
+				if err != nil {
+					return fmt.Errorf("rule %s: %w", rule.Code, err)
+				}
+			}
+			for _, name := range names {
+				if check.Type == "type_check" {
+					record(name, str(check.Params, "expected_type"))
+					continue
+				}
+				record(name, "date")
+				// The immutable layout slice is shared by every operand. The
+				// last date_format declaration supplies compare_columns layouts.
+				c.dateFormats[name] = layouts
+			}
+		}
+	}
+	return nil
 }

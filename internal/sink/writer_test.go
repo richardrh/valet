@@ -184,7 +184,7 @@ func startWriter(
 	t *testing.T, cfg *config.Config, store *fakeStore, budget *resource.Budget, schema *arrow.Schema,
 ) *Writer {
 	t.Helper()
-	w, err := newWriter(context.Background(), cfg, store, budget, "run", schema)
+	w, err := New(context.Background(), cfg, store, budget, "run", schema, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,7 +288,7 @@ func publishCSVFixture(t *testing.T) publishedRun {
 	budget := resource.New(64 << 20)
 	batch, result, summary := fixture(t)
 	defer batch.Release()
-	w, err := newWriter(context.Background(), cfg, store, budget, "run", batch.Record.Schema())
+	w, err := New(context.Background(), cfg, store, budget, "run", batch.Record.Schema(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -454,7 +454,7 @@ func TestParquetPreservesTypesAndBatchOwnership(t *testing.T) {
 	store := newFakeStore()
 	budget := resource.New(64 << 20)
 	batch, result, summary := fixture(t)
-	w, err := newWriter(context.Background(), cfg, store, budget, "run", batch.Record.Schema())
+	w, err := New(context.Background(), cfg, store, budget, "run", batch.Record.Schema(), nil)
 	if err != nil {
 		batch.Release()
 		t.Fatal(err)
@@ -536,7 +536,7 @@ func TestPublicationFailuresAbortWithoutManifest(t *testing.T) {
 			defer batch.Release()
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			w, err := newWriter(ctx, cfg, store, budget, "run", batch.Record.Schema())
+			w, err := New(ctx, cfg, store, budget, "run", batch.Record.Schema(), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -635,13 +635,13 @@ func TestExistingRunDirectoryIsNotOverwritten(t *testing.T) {
 	store := newFakeStore()
 	budget := resource.New(1 << 20)
 	schema := arrow.NewSchema(nil, nil)
-	first, err := newWriter(context.Background(), cfg, store, budget, "same", schema)
+	first, err := New(context.Background(), cfg, store, budget, "same", schema, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	first.Abort()
-	if _, err = newWriter(context.Background(), cfg, store, budget, "same", schema); err == nil {
-		t.Error("second newWriter for run \"same\" err = nil, want existing-directory error")
+	if _, err = New(context.Background(), cfg, store, budget, "same", schema, nil); err == nil {
+		t.Error("second New for run \"same\" err = nil, want existing-directory error")
 	}
 	if got := budget.Used(); got != 0 {
 		t.Errorf("budget used after rejected constructor = %d, want 0", got)
@@ -705,10 +705,10 @@ func TestConstructorResourceFailureDoesNotRetainState(t *testing.T) {
 	const tinyBudget = 10000
 	store := newFakeStore()
 	budget := resource.New(tinyBudget)
-	_, err := newWriter(context.Background(), testConfig(t, "csv"), store, budget, "run", arrow.NewSchema(nil, nil))
+	_, err := New(context.Background(), testConfig(t, "csv"), store, budget, "run", arrow.NewSchema(nil, nil), nil)
 	var limit *resource.ResourceLimitError
 	if !errors.As(err, &limit) {
-		t.Fatalf("newWriter err = %v, want *resource.ResourceLimitError", err)
+		t.Fatalf("New err = %v, want *resource.ResourceLimitError", err)
 	}
 	if got := budget.Used(); got != 0 {
 		t.Errorf("budget used after failed constructor = %d, want 0", got)

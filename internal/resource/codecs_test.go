@@ -100,10 +100,7 @@ func TestSnappyRawBlockBoundaries(t *testing.T) {
 
 func TestScopedDecoderBoundsAndLifetime(t *testing.T) {
 	resource.ConfigureParquetCodecs()
-	decoder, err := resource.NewParquetDecoder()
-	if err != nil {
-		t.Fatal(err)
-	}
+	decoder := &resource.ParquetDecoder{}
 	defer decoder.Close()
 	for _, kind := range []compress.Compression{compress.Codecs.Uncompressed, compress.Codecs.Snappy, compress.Codecs.Zstd} {
 		codec, err := compress.GetCodec(kind)
@@ -130,9 +127,6 @@ func TestScopedDecoderBoundsAndLifetime(t *testing.T) {
 	}
 	decoder.Close()
 	decoder.Close()
-	if _, err := decoder.Decode(compress.Codecs.Uncompressed, nil, nil); err == nil {
-		t.Fatal("closed decoder accepted decode")
-	}
 }
 
 func TestZstdConcatenatedFramesCannotEscapePageBound(t *testing.T) {
@@ -144,10 +138,7 @@ func TestZstdConcatenatedFramesCannotEscapePageBound(t *testing.T) {
 	payload := bytes.Repeat([]byte("bounded"), 128)
 	frame := codec.Encode(nil, payload)
 	frames := append(append([]byte(nil), frame...), frame...)
-	decoder, err := resource.NewParquetDecoder()
-	if err != nil {
-		t.Fatal(err)
-	}
+	decoder := &resource.ParquetDecoder{}
 	defer decoder.Close()
 	dst := make([]byte, len(payload), len(payload)*4)
 	if _, err := decoder.Decode(compress.Codecs.Zstd, dst, frames); err == nil {

@@ -10,19 +10,13 @@ import (
 	"github.com/richardrh/valet/internal/diagnostics"
 )
 
-type metadataReadKey struct{}
-
-func metadataReadContext(ctx context.Context) context.Context {
-	return context.WithValue(ctx, metadataReadKey{}, true)
-}
-func isMetadataRead(ctx context.Context) bool { v, _ := ctx.Value(metadataReadKey{}).(bool); return v }
-func recordBackendRead(ctx context.Context, n int) {
+func recordBackendRead(ctx context.Context, n int, metadata bool) {
 	if n <= 0 {
 		return
 	}
 	counter := diagnostics.SourcePayloadBytesRead
 	phase := diagnostics.Decode
-	if isMetadataRead(ctx) {
+	if metadata {
 		counter = diagnostics.SourceMetadataBytesRead
 		phase = diagnostics.Metadata
 	}
@@ -49,13 +43,6 @@ func (s *Store) SetParquetMetadataRange(obj Object, footerOffset int64) error {
 	return nil
 }
 
-func parquetMetadataBytes(offset, length, footerOffset int64) int64 {
-	end := offset + length
-	header := max(int64(0), min(end, int64(4))-offset)
-	footer := max(int64(0), end-max(offset, footerOffset))
-	return header + footer
-}
-
 // VerifyIdentity revalidates the pinned source without reading payload. Immutable
 // S3 versions are checked by version, not against whichever version is current.
 func (s *Store) VerifyIdentity(ctx context.Context, obj Object) (err error) {
@@ -78,7 +65,7 @@ func (s *Store) VerifyIdentity(ctx context.Context, obj Object) (err error) {
 	if err != nil {
 		return err
 	}
-	if err = s.reserve(sdkResponseCharge, "S3 final identity response"); err != nil {
+	if err = s.budget.Reserve(sdkResponseCharge, "S3 final identity response"); err != nil {
 		return err
 	}
 	defer s.budget.Release(sdkResponseCharge)
@@ -105,7 +92,7 @@ func (s *Store) EstablishBaseline(ctx context.Context, obj Object) error {
 	if isS3(obj.URI) {
 		return s.VerifyIdentity(ctx, obj)
 	}
-	reader, err := s.openLocalAt(ctx, obj, true)
+	reader, err := s.openLocalAt(ctx, obj, true, false)
 	if err != nil {
 		return err
 	}

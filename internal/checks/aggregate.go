@@ -168,7 +168,8 @@ func (a *exactAccumulator) add(v scalar, first bool) (bool, error) {
 	if !a.spilled {
 		if n, ok := a.coefficient(v); ok {
 			sum := a.nsum.Add(n)
-			if !a.want.sum || !addOverflows(a.nsum, n, sum) {
+			overflows := (a.nsum.Sign() < 0) == (n.Sign() < 0) && (sum.Sign() < 0) != (a.nsum.Sign() < 0)
+			if !a.want.sum || !overflows {
 				if a.want.sum {
 					a.nsum = sum
 				}
@@ -213,10 +214,6 @@ func (a *exactAccumulator) coefficient(v scalar) (decimal128.Num, bool) {
 		return decimal128.New(int64(v.decimal[1]), v.decimal[0]), true
 	}
 	return decimal128.Num{}, false
-}
-
-func addOverflows(a, b, sum decimal128.Num) bool {
-	return (a.Sign() < 0) == (b.Sign() < 0) && (sum.Sign() < 0) != (a.Sign() < 0)
 }
 
 // spill moves the native state into the rational accumulators. With first,

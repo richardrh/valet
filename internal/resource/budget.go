@@ -78,9 +78,6 @@ func (b *Budget) Hold(n int64, phase string) (Reservation, error) {
 	return Reservation{budget: b, n: n}, nil
 }
 
-// Size reports the bytes still held.
-func (r *Reservation) Size() int64 { return r.n }
-
 // Release returns the held charge once; later calls do nothing.
 func (r *Reservation) Release() {
 	if r.budget != nil {

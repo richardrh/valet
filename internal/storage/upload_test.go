@@ -171,12 +171,12 @@ func TestS3SmallPutUsesOutputSettings(t *testing.T) {
 		SSE:       "aws:kms",
 		KMSKeyID:  "key-arn",
 	}
-	store, err := New(context.Background(), input, output, budget)
+	store, err := New(context.Background(), input, output, budget, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	if err = store.Put(context.Background(), "s3://results/run/manifest.json", []byte("manifest")); err != nil {
+	if err = putObject(context.Background(), store, "s3://results/run/manifest.json", []byte("manifest")); err != nil {
 		t.Fatal(err)
 	}
 	if got := calls.Load(); got != 1 {
@@ -439,7 +439,7 @@ func TestS3PutPreservesConfiguredOpaquePrefix(t *testing.T) {
 	defer server.Close()
 	store, _ := testStore(t, 8<<20, server.URL)
 	uri := Join("s3://bucket/team//./results/", "run", "manifest.json")
-	if err := store.Put(context.Background(), uri, []byte("{}")); err != nil {
+	if err := putObject(context.Background(), store, uri, []byte("{}")); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -466,7 +466,7 @@ func TestConditionalPutReconcilesLostSuccess(t *testing.T) {
 	}))
 	defer server.Close()
 	store, budget := testStore(t, 32<<20, server.URL)
-	if err := store.Put(context.Background(), "s3://bucket/result.json", []byte("committed")); err != nil {
+	if err := putObject(context.Background(), store, "s3://bucket/result.json", []byte("committed")); err != nil {
 		t.Fatal(err)
 	}
 	if !object.stored {
@@ -502,7 +502,7 @@ func TestConditionalPutReconcilesAfterContextCancellation(t *testing.T) {
 	}))
 	defer server.Close()
 	store, budget := testStore(t, 32<<20, server.URL)
-	if err := store.Put(ctx, "s3://bucket/manifest.json", []byte("committed")); err != nil {
+	if err := putObject(ctx, store, "s3://bucket/manifest.json", []byte("committed")); err != nil {
 		t.Fatal(err)
 	}
 	if !object.stored {
@@ -1091,4 +1091,16 @@ func TestS3SerialMultipartFitsTenMiBBudget(t *testing.T) {
 	if budget.Used() != 0 {
 		t.Errorf("serial multipart retained budget=%d", budget.Used())
 	}
+}
+
+// putObject publishes body through the ordinary Create/Write/Close path.
+func putObject(ctx context.Context, store *Store, uri string, body []byte) error {
+	w, err := store.Create(ctx, uri)
+	if err != nil {
+		return err
+	}
+	if _, err = w.Write(body); err != nil {
+		return errors.Join(err, w.Abort())
+	}
+	return w.Close()
 }

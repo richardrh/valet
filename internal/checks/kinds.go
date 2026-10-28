@@ -3,6 +3,7 @@ package checks
 import (
 	"fmt"
 	"regexp"
+	"regexp/syntax"
 	"sort"
 	"strings"
 	"time"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/richardrh/valet/internal/config"
 	"github.com/richardrh/valet/internal/data"
+	"github.com/richardrh/valet/internal/source"
 )
 
 // checkKind is a built-in check type, resolved from its configuration name
@@ -44,40 +46,14 @@ const (
 	checkKindCount
 )
 
-// nullPolicy declares how a kind treats operand field states other than Valid.
-type nullPolicy uint8
-
-const (
-	// nullPasses: null/missing operands satisfy the check; invalid operands
-	// make it unevaluable.
-	nullPasses nullPolicy = iota
-	// nullFails: null/missing operands violate; invalid operands make it
-	// unevaluable.
-	nullFails
-	// nullFailsTextTarget: as nullFails for string/bool type_check targets,
-	// otherwise as nullPasses.
-	nullFailsTextTarget
-	// missingFails: state-only presence check; only an absent field violates
-	// and invalid conversions are not inspected.
-	missingFails
-	// nullOrMissingFails: state-only null check; null or absent violates and
-	// invalid conversions are not inspected.
-	nullOrMissingFails
-	// ownStateHandling: the kind's evaluator defines state handling (keys,
-	// column comparison, dataset-wide schema outcomes).
-	ownStateHandling
-)
-
 type kindDef struct {
 	name    string
-	null    nullPolicy
 	compile compileFunc
 }
 
 // checkDef is the input to one per-kind compile function.
 type checkDef struct {
 	kind   checkKind
-	null   nullPolicy
 	rule   *compiledRule
 	params map[string]any
 	// names are the resolved operand names; nil for kinds without operands.
@@ -87,30 +63,30 @@ type checkDef struct {
 type compileFunc func(c *compiler, d *checkDef) ([]check, error)
 
 var kindDefs = [checkKindCount]kindDef{
-	checkNotNull:                       {"not_null", nullOrMissingFails, compileStateCheck},
-	checkNotBlank:                      {"not_blank", nullFails, compileNotBlank},
-	checkIsPresent:                     {"is_present", missingFails, compileStateCheck},
-	checkValidLength:                   {"valid_length", nullFails, compileLength},
-	checkMinLength:                     {"min_length", nullFails, compileLength},
-	checkMaxLength:                     {"max_length", nullFails, compileLength},
-	checkValidRange:                    {"valid_range", nullPasses, compileRange},
-	checkEquals:                        {"equals", nullFails, compileEquality},
-	checkNotEquals:                     {"not_equals", nullPasses, compileEquality},
-	checkAllEqual:                      {"all_equal", nullFails, compileEquality},
-	checkHasNullKeys:                   {"has_null_keys", nullOrMissingFails, compileStateCheck},
-	checkValidValues:                   {"valid_values", nullPasses, compileMembership},
-	checkMatchesPattern:                {"matches_pattern", nullFails, compilePattern},
-	checkIsUnique:                      {"is_unique", ownStateHandling, compileUnique},
-	checkIsUniqueComposite:             {"is_unique_composite", ownStateHandling, compileUnique},
-	checkCompareColumns:                {"compare_columns", ownStateHandling, compileCompareColumns},
-	checkReferentialIntegrity:          {"referential_integrity", ownStateHandling, compileReference},
-	checkReferentialIntegrityComposite: {"referential_integrity_composite", ownStateHandling, compileReference},
-	checkRequiredColumns:               {"required_columns", ownStateHandling, compileRequiredColumns},
-	checkSchemaMatches:                 {"schema_matches", ownStateHandling, compileSchemaMatches},
-	checkValidSchemaColumns:            {"valid_schema_columns", ownStateHandling, compileSchemaNames},
-	checkTypeCheck:                     {"type_check", nullFailsTextTarget, compileTypeCheck},
-	checkDateFormat:                    {"date_format", nullPasses, compileDateFormat},
-	checkTimestampWindow:               {"timestamp_window", nullPasses, compileTimestampWindow},
+	checkNotNull:                       {"not_null", compileStateCheck},
+	checkNotBlank:                      {"not_blank", compileNotBlank},
+	checkIsPresent:                     {"is_present", compileStateCheck},
+	checkValidLength:                   {"valid_length", compileLength},
+	checkMinLength:                     {"min_length", compileLength},
+	checkMaxLength:                     {"max_length", compileLength},
+	checkValidRange:                    {"valid_range", compileRange},
+	checkEquals:                        {"equals", compileEquality},
+	checkNotEquals:                     {"not_equals", compileEquality},
+	checkAllEqual:                      {"all_equal", compileEquality},
+	checkHasNullKeys:                   {"has_null_keys", compileStateCheck},
+	checkValidValues:                   {"valid_values", compileMembership},
+	checkMatchesPattern:                {"matches_pattern", compilePattern},
+	checkIsUnique:                      {"is_unique", compileUnique},
+	checkIsUniqueComposite:             {"is_unique_composite", compileUnique},
+	checkCompareColumns:                {"compare_columns", compileCompareColumns},
+	checkReferentialIntegrity:          {"referential_integrity", compileReference},
+	checkReferentialIntegrityComposite: {"referential_integrity_composite", compileReference},
+	checkRequiredColumns:               {"required_columns", compileRequiredColumns},
+	checkSchemaMatches:                 {"schema_matches", compileSchemaMatches},
+	checkValidSchemaColumns:            {"valid_schema_columns", compileSchemaNames},
+	checkTypeCheck:                     {"type_check", compileTypeCheck},
+	checkDateFormat:                    {"date_format", compileDateFormat},
+	checkTimestampWindow:               {"timestamp_window", compileTimestampWindow},
 }
 
 var kindByName = func() map[string]checkKind {
@@ -174,7 +150,7 @@ func compileStateCheck(c *compiler, d *checkDef) ([]check, error) {
 	}
 	s := &stateCheck{columns: cols}
 	s.failOn[data.Missing] = true
-	s.failOn[data.Null] = d.null == nullOrMissingFails
+	s.failOn[data.Null] = d.kind != checkIsPresent
 	return []check{s}, nil
 }
 
@@ -192,7 +168,7 @@ func (s *stateCheck) eval(_ *Program, b *data.Batch, row int) (verdict, error) {
 // cellTest judges one Valid cell.
 type cellTest interface{ test(v scalar) verdict }
 
-// valueCheck applies a per-column cell test under the kind's null policy.
+// valueCheck applies a per-column cell test; null/missing cells take onNull.
 // Multiple columns combine with OR: any failed assertion violates the rule.
 type valueCheck struct {
 	columns []operand
@@ -212,13 +188,6 @@ func (c *compiler) valueCheck(d *checkDef, onNull verdict, bind func(col operand
 		}
 	}
 	return []check{v}, nil
-}
-
-func (d *checkDef) onNull() verdict {
-	if d.null == nullFails {
-		return verdictFail
-	}
-	return verdictPass
 }
 
 func (v *valueCheck) column(b *data.Batch, row, i int) verdict {
@@ -252,7 +221,7 @@ func (blankTest) test(v scalar) verdict {
 }
 
 func compileNotBlank(c *compiler, d *checkDef) ([]check, error) {
-	return c.valueCheck(d, d.onNull(), func(operand) (cellTest, error) { return blankTest{}, nil })
+	return c.valueCheck(d, verdictFail, func(operand) (cellTest, error) { return blankTest{}, nil })
 }
 
 type lengthBound uint8
@@ -297,7 +266,7 @@ func compileLength(c *compiler, d *checkDef) ([]check, error) {
 		return nil, fmt.Errorf("invalid length")
 	}
 	t := lengthTest{n: int(f), bound: bound}
-	return c.valueCheck(d, d.onNull(), func(operand) (cellTest, error) { return t, nil })
+	return c.valueCheck(d, verdictFail, func(operand) (cellTest, error) { return t, nil })
 }
 
 type patternTest struct{ rx *regexp.Regexp }
@@ -307,11 +276,43 @@ func (t patternTest) test(v scalar) verdict {
 }
 
 func compilePattern(c *compiler, d *checkDef) ([]check, error) {
-	rx, err := c.compileRegex(str(d.params, "pattern"))
+	// The program's base reservation covers both parse trees. Repetition
+	// expands only after its conservative instruction cost is reserved.
+	pattern := str(d.params, "pattern")
+	tree, err := syntax.Parse(pattern, syntax.Perl)
 	if err != nil {
 		return nil, err
 	}
-	return c.valueCheck(d, d.onNull(), func(operand) (cellTest, error) { return patternTest{rx}, nil })
+	if err := c.p.reserve(regexInstructions(tree)*bytesPerRegexInstruction, "compiled regular expression"); err != nil {
+		return nil, err
+	}
+	rx, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, err
+	}
+	return c.valueCheck(d, verdictFail, func(operand) (cellTest, error) { return patternTest{rx}, nil })
+}
+
+// regexInstructions estimates compiled instructions, saturating at
+// maxRegexInstructions. Go's parser already caps repeat counts at 1000, so
+// saturation only guards nested repeats.
+func regexInstructions(re *syntax.Regexp) int64 {
+	n := int64(4 + len(re.Rune))
+	for _, child := range re.Sub {
+		n = min(n+regexInstructions(child), maxRegexInstructions)
+	}
+	if re.Op == syntax.OpRepeat {
+		copies := re.Max
+		if copies < 0 {
+			copies = re.Min + 1
+		}
+		copies = max(copies, 1)
+		if n > maxRegexInstructions/int64(copies) {
+			return maxRegexInstructions
+		}
+		n *= int64(copies)
+	}
+	return n
 }
 
 // exactRangeTest compares declared-schema cells exactly against bounds bound
@@ -383,7 +384,7 @@ func compileRange(c *compiler, d *checkDef) ([]check, error) {
 	if err := c.p.reserve(int64(len(d.names))*bytesPerOperand, "bound comparison literals"); err != nil {
 		return nil, err
 	}
-	return c.valueCheck(d, d.onNull(), func(col operand) (cellTest, error) {
+	return c.valueCheck(d, verdictPass, func(col operand) (cellTest, error) {
 		if !c.exact {
 			return legacy, nil
 		}
@@ -428,7 +429,7 @@ func compileEquality(c *compiler, d *checkDef) ([]check, error) {
 		return nil, err
 	}
 	failIfEqual := d.kind == checkNotEquals
-	return c.valueCheck(d, d.onNull(), func(col operand) (cellTest, error) {
+	return c.valueCheck(d, failIf(!failIfEqual), func(col operand) (cellTest, error) {
 		bound, err := bindFloatingLiteral(value, col.typ, false)
 		if err != nil {
 			return nil, err
@@ -492,7 +493,7 @@ func compileMembership(c *compiler, d *checkDef) ([]check, error) {
 	if err := c.p.reserve(int64(len(d.names))*bytesPerOperand, "bound comparison literals"); err != nil {
 		return nil, err
 	}
-	return c.valueCheck(d, d.onNull(), func(col operand) (cellTest, error) {
+	return c.valueCheck(d, verdictPass, func(col operand) (cellTest, error) {
 		if !isFloatType(col.typ) {
 			set, err := c.p.membershipSet(values, false)
 			return membershipTest{values: values, set: set}, err
@@ -545,7 +546,7 @@ func compileDateFormat(c *compiler, d *checkDef) ([]check, error) {
 	if len(layouts) == 0 {
 		return nil, fmt.Errorf("date formats required")
 	}
-	return c.valueCheck(d, d.onNull(), func(operand) (cellTest, error) { return dateFormatTest{layouts}, nil })
+	return c.valueCheck(d, verdictPass, func(operand) (cellTest, error) { return dateFormatTest{layouts}, nil })
 }
 
 // windowTest checks inclusive instant bounds; text cells without an explicit
@@ -567,6 +568,22 @@ func (t windowTest) test(v scalar) verdict {
 		return verdictFail
 	}
 	return verdictPass
+}
+
+// timestampInZone reads an instant; text without an explicit offset is local
+// to zone and must be unambiguous.
+func timestampInZone(v scalar, zone string) (scalar, bool) {
+	if v.kind == valTime {
+		return v, true
+	}
+	if v.kind != valString {
+		return scalar{}, false
+	}
+	t, err := source.ParseTimestamp(v.s, config.Column{Timezone: zone})
+	if err != nil {
+		return scalar{}, false
+	}
+	return timeScalar(t), true
 }
 
 func compileTimestampWindow(c *compiler, d *checkDef) ([]check, error) {
@@ -591,7 +608,7 @@ func compileTimestampWindow(c *compiler, d *checkDef) ([]check, error) {
 	if t.min == nil && t.max == nil {
 		return nil, fmt.Errorf("timestamp bound required")
 	}
-	return c.valueCheck(d, d.onNull(), func(operand) (cellTest, error) { return t, nil })
+	return c.valueCheck(d, verdictPass, func(operand) (cellTest, error) { return t, nil })
 }
 
 // --- compare_columns ---

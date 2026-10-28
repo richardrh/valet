@@ -14,8 +14,65 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/aws/smithy-go"
 	"github.com/richardrh/valet/internal/resource"
 )
+
+// publicError is an explicit capability to display a caller-audited message.
+// Its cause remains available for error classification and exit-code mapping.
+type publicError struct {
+	cause   error
+	message string
+}
+
+func (e *publicError) Error() string { return e.message }
+func (e *publicError) Unwrap() error { return e.cause }
+
+// PublicError marks an error from CLI parsing or configuration validation as
+// safe to present. Callers MUST NOT use this for data/conversion errors, rule
+// messages, SDK responses, credentials or arbitrary backend errors. Embedded URI
+// userinfo, queries and fragments are still removed, the message is capped, and
+// the handler escapes terminal controls. A nil error remains nil.
+func PublicError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if _, ok := err.(*publicError); ok {
+		return err
+	}
+	// Only this fixed-size prefix is scanned or retained. A URI truncated in
+	// userinfo is either redacted by the parser or replaced as malformed.
+	text := clipped(err.Error(), 512)
+	var result [512]byte
+	n := 0
+	for len(text) != 0 && n < len(result) {
+		scheme := strings.Index(text, "://")
+		if scheme < 0 {
+			n += copy(result[n:], text)
+			break
+		}
+		start := scheme
+		for start > 0 {
+			c := text[start-1]
+			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '+' || c == '-' || c == '.') {
+				break
+			}
+			start--
+		}
+		end := scheme + 3
+		for end < len(text) {
+			c := text[end]
+			if c <= ' ' || c == '"' || c == '\'' || c == '<' || c == '>' || c == ')' || c == ']' || c == '}' {
+				break
+			}
+			end++
+		}
+		n += copy(result[n:], text[:start])
+		n += copy(result[n:], redactURI(text[start:end]))
+		text = text[end:]
+	}
+	return &publicError{cause: err, message: string(result[:n])}
+}
 
 // The workspace and derived-handler slots are fixed, charged by BindBudget, and
 // shared across every worker. Bound attributes are encoded immediately so no
@@ -185,33 +242,22 @@ func (h *Handler) Handle(_ context.Context, record slog.Record) error {
 	return nil
 }
 
-func reserved(key string) bool {
-	switch key {
-	case "log_version", "event", "level", "time", "msg", "run_id", "command", "seq":
-		return true
-	}
-	return false
-}
-
-func sensitive(key string) bool {
-	key = strings.ToLower(key)
-	for _, token := range [...]string{"password", "secret", "credential", "token", "access_key", "min_value", "max_value", "literal", "record", "cell"} {
-		if strings.Contains(key, token) {
-			return true
-		}
-	}
-	switch key {
-	case "message", "min", "max", "value", "values", "minimum", "maximum":
-		return true
-	}
-	return false
-}
-
 func (h *Handler) appendAttr(b *recordBuilder, attr slog.Attr, depth int) {
 	if attr.Key == "" && attr.Value.Kind() != slog.KindGroup {
 		return
 	}
-	if reserved(attr.Key) || sensitive(attr.Key) {
+	switch attr.Key {
+	case "log_version", "event", "level", "time", "msg", "run_id", "command", "seq":
+		return
+	}
+	lowerKey := strings.ToLower(attr.Key)
+	for _, token := range [...]string{"password", "secret", "credential", "token", "access_key", "min_value", "max_value", "literal", "record", "cell"} {
+		if strings.Contains(lowerKey, token) {
+			return
+		}
+	}
+	switch lowerKey {
+	case "message", "min", "max", "value", "values", "minimum", "maximum":
 		return
 	}
 	value := attr.Value.Resolve()
@@ -237,9 +283,40 @@ func (h *Handler) appendAttr(b *recordBuilder, attr slog.Attr, depth int) {
 	if h.groupN != 0 {
 		key = string(h.group[:h.groupN]) + "." + key
 	}
+	// evidence_fields is the sole array-valued exception to Any redaction. Only
+	// canonical internal proof-field names are emitted, never arbitrary strings.
 	if attr.Key == "evidence_fields" && value.Kind() == slog.KindAny {
 		if fields, ok := value.Any().([]string); ok {
-			b.evidenceFields(key, fields)
+			names := [...]string{"null_count", "nan_count", "min_value", "max_value", "type_defined_order", "schema"}
+			var seen uint8
+			for i, field := range fields {
+				if i == 64 {
+					b.truncated = true
+					break
+				}
+				for j, name := range names {
+					if field == name {
+						seen |= 1 << j
+						break
+					}
+				}
+			}
+			if !b.key(key, 128) {
+				return
+			}
+			b.buf = append(b.buf, '[')
+			first := true
+			for i, name := range names {
+				if seen&(1<<i) == 0 {
+					continue
+				}
+				if !first {
+					b.buf = append(b.buf, ',')
+				}
+				first = false
+				b.buf = appendJSONQuote(b.buf, name)
+			}
+			b.buf = append(b.buf, ']')
 			return
 		}
 	}
@@ -247,20 +324,80 @@ func (h *Handler) appendAttr(b *recordBuilder, attr slog.Attr, depth int) {
 	// bodies. Preserve their classification at the callsite, not their text.
 	// Only audited public messages and typed InputError fields are shown.
 	if strings.EqualFold(attr.Key, "error") {
-		original := value
+		var err error
+		if value.Kind() == slog.KindAny {
+			err, _ = value.Any().(error)
+		}
 		b.attr("error_class", slog.StringValue(errorClass(value)))
 		value = slog.StringValue("operation failed")
-		if original.Kind() == slog.KindAny {
-			if err, ok := original.Any().(error); ok {
-				appendErrorDetails(b, err)
-				var public *publicError
-				var input *InputError
-				switch {
-				case errors.As(err, &public):
-					value = slog.StringValue(public.message)
-				case errors.As(err, &input):
-					value = slog.StringValue(input.Error())
+		if err != nil {
+			var limit *resource.ResourceLimitError
+			errors.As(err, &limit)
+			var input *InputError
+			isInput := errors.As(err, &input)
+			// Read typed operational fields only. Never format an error, SDK
+			// response, API message, HTTP body, header or request identifier.
+			if limit != nil {
+				b.attr("resource_phase", slog.StringValue(clipped(limit.Phase, 96)))
+				b.attr("limit_bytes", slog.Int64Value(limit.Limit))
+				b.attr("used_bytes", slog.Int64Value(limit.Used))
+				b.attr("requested_bytes", slog.Int64Value(limit.Requested))
+			}
+			if input != nil {
+				if input.Format != "" {
+					b.attr("input_format", slog.StringValue(input.Format))
 				}
+				if input.Source != "" {
+					b.attr("input_source", slog.StringValue(redactURI(clipped(input.Source, 512))))
+				}
+				if input.Line > 0 {
+					b.attr("input_line", slog.Int64Value(input.Line))
+					if input.Column > 0 {
+						b.attr("input_column", slog.Int64Value(input.Column))
+					}
+				}
+				if input.Line == 0 || input.Offset > 0 {
+					b.attr("input_offset", slog.Int64Value(input.Offset))
+				}
+				b.attr("framing_reason", slog.StringValue(safeIdentifier(input.Reason, 32)))
+				if input.Expected > 0 {
+					b.attr("expected_fields", slog.IntValue(input.Expected))
+					b.attr("found_fields", slog.IntValue(input.Found))
+				}
+				if hint := input.Hint(); hint != "" {
+					b.attr("hint", slog.StringValue(hint))
+				}
+			}
+			var operation *smithy.OperationError
+			if errors.As(err, &operation) && operation != nil {
+				b.attr("service", slog.StringValue(safeIdentifier(operation.Service(), 64)))
+				b.attr("operation", slog.StringValue(safeIdentifier(operation.Operation(), 64)))
+			}
+			var response interface{ HTTPStatusCode() int }
+			if errors.As(err, &response) {
+				status := response.HTTPStatusCode()
+				if status >= 100 && status <= 599 {
+					b.attr("http_status", slog.IntValue(status))
+				}
+			}
+			var api smithy.APIError
+			if errors.As(err, &api) {
+				// GenericAPIError.Code comes from the remote body. Permit reviewed S3
+				// protocol identifiers, never arbitrary remote text masquerading as code.
+				code := api.ErrorCode()
+				switch code {
+				case "AccessDenied", "AccountProblem", "AllAccessDisabled", "AuthorizationHeaderMalformed", "BadDigest", "BucketAlreadyExists", "BucketAlreadyOwnedByYou", "BucketNotEmpty", "EntityTooLarge", "EntityTooSmall", "ExpiredToken", "IncompleteBody", "InternalError", "InvalidAccessKeyId", "InvalidArgument", "InvalidBucketName", "InvalidDigest", "InvalidObjectState", "InvalidPart", "InvalidPartOrder", "InvalidRange", "InvalidRequest", "InvalidSecurity", "InvalidToken", "MalformedXML", "MethodNotAllowed", "MissingContentLength", "NoSuchBucket", "NoSuchKey", "NoSuchUpload", "NoSuchVersion", "NotFound", "NotImplemented", "OperationAborted", "PermanentRedirect", "PreconditionFailed", "RequestTimeout", "RequestTimeTooSkewed", "RequestTorrentOfBucketError", "ServiceUnavailable", "SignatureDoesNotMatch", "SlowDown", "TemporaryRedirect", "TooManyBuckets", "UnexpectedContent", "UnresolvableGrantByEmailAddress", "UserKeyMustBeSpecified", "XAmzContentSHA256Mismatch":
+				default:
+					code = "unknown"
+				}
+				b.attr("api_error_code", slog.StringValue(code))
+			}
+			var public *publicError
+			switch {
+			case errors.As(err, &public):
+				value = slog.StringValue(public.message)
+			case isInput:
+				value = slog.StringValue(input.Error())
 			}
 		}
 	}
@@ -277,6 +414,18 @@ func (h *Handler) appendAttr(b *recordBuilder, attr slog.Attr, depth int) {
 		value = slog.StringValue("[redacted]")
 	}
 	b.attr(key, value)
+}
+
+func safeIdentifier(value string, limit int) string {
+	if value == "" || len(value) > limit {
+		return "unknown"
+	}
+	for _, c := range value {
+		if !(c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '_' || c == '-' || c == '.') {
+			return "unknown"
+		}
+	}
+	return value
 }
 
 func clipped(text string, size int) string {
@@ -336,41 +485,6 @@ func (b *recordBuilder) key(key string, valueBytes int) bool {
 		b.buf = append(b.buf, '=')
 	}
 	return true
-}
-
-// evidenceFields is the sole array-valued exception to Any redaction. Only
-// canonical internal proof-field names are emitted, never arbitrary strings.
-func (b *recordBuilder) evidenceFields(key string, fields []string) {
-	names := [...]string{"null_count", "nan_count", "min_value", "max_value", "type_defined_order", "schema"}
-	var seen uint8
-	for i, field := range fields {
-		if i == 64 {
-			b.truncated = true
-			break
-		}
-		for j, name := range names {
-			if field == name {
-				seen |= 1 << j
-				break
-			}
-		}
-	}
-	if !b.key(key, 128) {
-		return
-	}
-	b.buf = append(b.buf, '[')
-	first := true
-	for i, name := range names {
-		if seen&(1<<i) == 0 {
-			continue
-		}
-		if !first {
-			b.buf = append(b.buf, ',')
-		}
-		first = false
-		b.buf = appendJSONQuote(b.buf, name)
-	}
-	b.buf = append(b.buf, ']')
 }
 
 func (b *recordBuilder) attr(key string, value slog.Value) {

@@ -100,7 +100,7 @@ type orderedParquetRecords struct {
 	announced bool
 }
 
-func newOrderedParquetRecords(ctx context.Context, input *parquetInput, fileSize int64) (*orderedParquetRecords, error) {
+func newOrderedParquetRecords(ctx context.Context, input *parquetInput) (*orderedParquetRecords, error) {
 	groups := input.file.NumRowGroups()
 	workers := min(32, max(1, input.d.cfg.Execution.Workers), max(1, groups))
 	// Admission uses the largest single group, never the entire file. This is
@@ -176,7 +176,7 @@ func newOrderedParquetRecords(ctx context.Context, input *parquetInput, fileSize
 	for worker := range workers {
 		r.inputs[worker] = make(chan parquetRecordResult)
 		r.wait.Add(1)
-		go r.runWorker(workerCtx, input, fileSize, worker)
+		go r.runWorker(workerCtx, input, worker)
 	}
 	return r, nil
 }
@@ -204,7 +204,7 @@ type parquetRowGroupWorker struct {
 	arrow    *pqarrow.FileReader
 }
 
-func (r *orderedParquetRecords) runWorker(ctx context.Context, original *parquetInput, fileSize int64, worker int) {
+func (r *orderedParquetRecords) runWorker(ctx context.Context, original *parquetInput, worker int) {
 	defer r.wait.Done()
 	defer close(r.inputs[worker])
 	p := &parquetInput{d: original.d, handle: original.handle, file: original.file, schema: original.schema, header: original.header}
@@ -249,7 +249,7 @@ func (r *orderedParquetRecords) runWorker(ctx context.Context, original *parquet
 			p.dictStates = make([]int64, len(p.header))
 			prepared = true
 		}
-		err := r.readGroup(ctx, state, fileSize, group, worker)
+		err := r.readGroup(ctx, state, group, worker)
 		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 			r.failures[worker] = parquetWorkerFailure{group: group, err: err}
 		}
@@ -259,7 +259,7 @@ func (r *orderedParquetRecords) runWorker(ctx context.Context, original *parquet
 	}
 }
 
-func (r *orderedParquetRecords) readGroup(ctx context.Context, state *parquetRowGroupWorker, fileSize int64, group, worker int) (err error) {
+func (r *orderedParquetRecords) readGroup(ctx context.Context, state *parquetRowGroupWorker, group, worker int) (err error) {
 	p := state.input
 	state.bytes.Reset(nil)
 	defer func() {
@@ -284,7 +284,7 @@ func (r *orderedParquetRecords) readGroup(ctx context.Context, state *parquetRow
 	}
 	copy(p.verified, "PAR1")
 	span := diagnostics.Start(ctx, diagnostics.Decode)
-	err = p.validatePages(ctx, fileSize)
+	err = p.validatePages(ctx)
 	span.End(err)
 	if err != nil {
 		return err

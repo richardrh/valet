@@ -149,7 +149,7 @@ func (r *datasetReader) nextNativeParquet(ctx context.Context) (batch *data.Batc
 			loc := data.Location{Source: d.objects[r.object].URI, SourceOrdinal: uint64(r.object + 1), Row: r.row + uint64(row) + 1, GlobalRow: r.global + uint64(row) + 1,
 				RowGroup: p.groupCoordinate, RowInGroup: p.groupRow + uint64(row) + 1, PositionBasis: r.positionBasis()}
 			batch.Locations[row] = loc
-			if err = validateNativeParquetRowWidth(rec, row, d.recordLimit); err != nil {
+			if err = validateParquetRowWidth(rec, row, d.recordLimit); err != nil {
 				return nil, true, err
 			}
 			for i, col := range columns {
@@ -285,7 +285,7 @@ func (r *datasetReader) nextNativeParquet(ctx context.Context) (batch *data.Batc
 	}
 }
 
-func validateNativeParquetRowWidth(record arrow.RecordBatch, row int, limit int64) error {
+func validateParquetRowWidth(record arrow.RecordBatch, row int, limit int64) error {
 	var width int64
 	for i, column := range record.Columns() {
 		field := record.Schema().Field(i)

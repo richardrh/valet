@@ -334,9 +334,6 @@ type encodedValues struct {
 }
 
 func validateEncodedValues(v encodedValues) error {
-	if e := validatePageEncoding(v.physical, v.encoding); e != nil {
-		return e
-	}
 	data, count, maxRecord, ensure := v.data, v.count, v.maxRecord, v.ensure
 	if count == 0 && len(data) == 0 {
 		return nil
@@ -390,52 +387,49 @@ func validateEncodedValues(v encodedValues) error {
 		}
 		return nil
 	case parquet.Encodings.DeltaByteArray:
-		return validateDeltaByteArray(data, count, maxRecord, ensure)
+		if e := ensure(count * deltaPrefixStateBytes); e != nil {
+			return e
+		}
+		prefixes := make([]int32, int(count))
+		used, e := scanDelta(data, count, 32, ensure, func(i, n int64) error {
+			if n < 0 || n > maxRecord {
+				return errors.New("invalid delta prefix length")
+			}
+			prefixes[i] = int32(n)
+			return nil
+		})
+		if e != nil {
+			return e
+		}
+		var previous, suffixBytes, expanded int64
+		suffixUsed, e := scanDelta(data[used:], count, 32, ensure, func(i, n int64) error {
+			prefix := int64(prefixes[i])
+			if n < 0 || n > maxRecord || prefix > previous || prefix > maxRecord-n || n > int64(len(data))-suffixBytes {
+				return errors.New("invalid delta prefix/suffix length")
+			}
+			if i == 0 && prefix != 0 {
+				return errors.New("first delta prefix must be zero")
+			}
+			previous = prefix + n
+			suffixBytes += n
+			if n != 0 || i == 0 {
+				if expanded > math.MaxInt64-previous {
+					return errors.New("delta expansion overflow")
+				}
+				expanded += previous
+				if e := ensure(expanded*2 + count*deltaPrefixStateBytes); e != nil {
+					return e
+				}
+			}
+			return nil
+		})
+		if e != nil {
+			return e
+		}
+		if suffixBytes != int64(len(data)-used-suffixUsed) {
+			return errors.New("delta suffixes exceed actual payload")
+		}
+		return nil
 	}
 	return errors.New("unsupported Parquet encoding")
-}
-func validateDeltaByteArray(data []byte, count, maxRecord int64, ensure func(int64) error) error {
-	if e := ensure(count * deltaPrefixStateBytes); e != nil {
-		return e
-	}
-	prefixes := make([]int32, int(count))
-	used, e := scanDelta(data, count, 32, ensure, func(i, n int64) error {
-		if n < 0 || n > maxRecord {
-			return errors.New("invalid delta prefix length")
-		}
-		prefixes[i] = int32(n)
-		return nil
-	})
-	if e != nil {
-		return e
-	}
-	var previous, suffixBytes, expanded int64
-	suffixUsed, e := scanDelta(data[used:], count, 32, ensure, func(i, n int64) error {
-		prefix := int64(prefixes[i])
-		if n < 0 || n > maxRecord || prefix > previous || prefix > maxRecord-n || n > int64(len(data))-suffixBytes {
-			return errors.New("invalid delta prefix/suffix length")
-		}
-		if i == 0 && prefix != 0 {
-			return errors.New("first delta prefix must be zero")
-		}
-		previous = prefix + n
-		suffixBytes += n
-		if n != 0 || i == 0 {
-			if expanded > math.MaxInt64-previous {
-				return errors.New("delta expansion overflow")
-			}
-			expanded += previous
-			if e := ensure(expanded*2 + count*deltaPrefixStateBytes); e != nil {
-				return e
-			}
-		}
-		return nil
-	})
-	if e != nil {
-		return e
-	}
-	if suffixBytes != int64(len(data)-used-suffixUsed) {
-		return errors.New("delta suffixes exceed actual payload")
-	}
-	return nil
 }

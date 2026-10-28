@@ -51,7 +51,6 @@ func (p *Program) bindBatch(b *data.Batch) {
 		p.columns[i] = bindColumn(b, name, i)
 	}
 }
-func (p *Program) unbindBatch() { clear(p.columns) }
 func (o operand) state(row int) data.State {
 	bound := o.bound
 	if !bound.haveState || bound.stateRow != row {
@@ -67,21 +66,4 @@ func (o operand) value(row int) scalar {
 		bound.cachedRow, bound.haveValue = row, true
 	}
 	return bound.cachedValue
-}
-
-func sameCondition(a, b *condition) bool {
-	if a.kind != b.kind || a.op != b.op || a.column.index != b.column.index || a.numeric != b.numeric || a.value != b.value || len(a.values) != len(b.values) || len(a.children) != len(b.children) {
-		return false
-	}
-	for i, value := range a.values {
-		if value != b.values[i] {
-			return false
-		}
-	}
-	for i, child := range a.children {
-		if child != b.children[i] {
-			return false
-		}
-	}
-	return true
 }

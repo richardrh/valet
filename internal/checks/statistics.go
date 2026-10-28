@@ -128,7 +128,12 @@ func (p *Program) PlanStatistics(groups []data.ParquetGroup) (*data.StatisticsPl
 		}
 		for _, r := range p.rules {
 			for _, c := range r.checks {
-				ev := data.CheckEvidence{Code: r.code, CheckIndex: c.index, Columns: proofColumns(c), Claim: "unknown", Fields: []string{}, Reason: "unsupported_check"}
+				operands := proofOperands(c)
+				columns := make([]string, len(operands))
+				for i, col := range operands {
+					columns[i] = col.name
+				}
+				ev := data.CheckEvidence{Code: r.code, CheckIndex: c.index, Columns: columns, Claim: "unknown", Fields: []string{}, Reason: "unsupported_check"}
 				if r.when != nil {
 					ev.Reason = "condition_requires_values"
 				} else {
@@ -233,14 +238,6 @@ func proofOperands(c *compiledCheck) []operand {
 		return v.columns
 	}
 	return nil
-}
-func proofColumns(c *compiledCheck) []string {
-	cols := proofOperands(c)
-	out := make([]string, len(cols))
-	for i, col := range cols {
-		out[i] = col.name
-	}
-	return out
 }
 func validCounts(s *data.ColumnStatistics, rows uint64) bool {
 	if s == nil {

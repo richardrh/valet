@@ -10,6 +10,7 @@ import (
 	"hash"
 	"io"
 	"log/slog"
+	"slices"
 	"strings"
 
 	"github.com/apache/arrow-go/v18/arrow"
@@ -114,7 +115,7 @@ func (s *stream) ref() Reference {
 // finish marks the stream closed and returns its charge; shared by close and abort.
 func (s *stream) finish() {
 	s.closed = true
-	s.line.drop()
+	s.line = lineEncoder{}
 	s.budget.Release(s.charge)
 	s.charge = 0
 }
@@ -206,40 +207,9 @@ type schemaIssueKey struct {
 	scope, code, column, reason string
 }
 
-func issueIdentity(issue data.Issue) schemaIssueKey {
-	return schemaIssueKey{scope: issue.Scope, code: issue.Code, column: issue.Column, reason: issue.Reason}
-}
-
-func (w *Writer) schemaIssueStreamed(issue data.Issue) bool {
-	key := issueIdentity(issue)
-	for _, existing := range w.streamedSchema {
-		if existing == key {
-			return true
-		}
-	}
-	return false
-}
-
-type options struct {
-	logger *slog.Logger
-}
-
-// Option configures a Writer.
-type Option func(*options)
-
-// WithLogger sets the logger for part publication and cleanup events.
-func WithLogger(logger *slog.Logger) Option {
-	return func(o *options) {
-		if logger != nil {
-			o.logger = logger
-		}
-	}
-}
-
-func New(ctx context.Context, cfg *config.Config, store *storage.Store, budget *resource.Budget, runID string, schema *arrow.Schema, opts ...Option) (*Writer, error) {
-	return newWriter(ctx, cfg, store, budget, runID, schema, opts...)
-}
-func newWriter(ctx context.Context, cfg *config.Config, store objectStore, budget *resource.Budget, runID string, schema *arrow.Schema, opts ...Option) (w *Writer, err error) {
+// New starts an unpublished run output. A nil logger discards part
+// publication and cleanup events.
+func New(ctx context.Context, cfg *config.Config, store objectStore, budget *resource.Budget, runID string, schema *arrow.Schema, logger *slog.Logger) (w *Writer, err error) {
 	if runID == "" || strings.ContainsAny(runID, "/\\") || runID == "." || runID == ".." {
 		return nil, errors.New("invalid output run ID")
 	}
@@ -265,11 +235,10 @@ func newWriter(ctx context.Context, cfg *config.Config, store objectStore, budge
 	if cfg.Output.Parquet.Statistics == "bounded" && cfg.Output.Format != "parquet" {
 		return nil, errors.New("bounded statistics require Parquet output")
 	}
-	o := options{logger: slog.New(slog.DiscardHandler)}
-	for _, opt := range opts {
-		opt(&o)
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
 	}
-	w = &Writer{ctx: ctx, cfg: cfg, store: store, budget: budget, logger: o.logger, runID: runID, root: storage.Join(cfg.Output.URI, runID), schema: schema}
+	w = &Writer{ctx: ctx, cfg: cfg, store: store, budget: budget, logger: logger, runID: runID, root: storage.Join(cfg.Output.URI, runID), schema: schema}
 	w.partBytes = cfg.PartBytes()
 	w.groupTarget = max(int64(1), min(min(cfg.BatchBytes(), 2<<20)*4, w.partBytes))
 	success := false
@@ -312,7 +281,17 @@ func newWriter(ctx context.Context, cfg *config.Config, store objectStore, budge
 		return w, err
 	}
 	defer budget.Release(metadataCharge)
-	if w.rulesRef, err = w.writeMetadata("rules.json", w.rulesDocument()); err != nil {
+	rules := rulesMetadata{ReportVersion: data.ReportVersion, ConfigVersion: cfg.ConfigVersion, Name: cfg.Name, Version: cfg.Version, Rules: make([]ruleMetadata, 0, len(cfg.Rules)), DatasetRules: make([]ruleMetadata, 0, len(cfg.DatasetRules)), Fields: make([]fieldMetadata, 0, w.outputSchema.NumFields()), CSVNull: "\\N", CSVStringEscape: "double_backslash", CSVBinary: "base64", JSONIntegerPrecision: "64-bit integers are JSON numbers; use a lossless JSON decoder"}
+	for _, r := range cfg.Rules {
+		rules.Rules = append(rules.Rules, ruleMetadata{r.Code, r.Message, r.Level, r})
+	}
+	for _, r := range cfg.DatasetRules {
+		rules.DatasetRules = append(rules.DatasetRules, ruleMetadata{Code: r.Code, Severity: r.Level, Definition: r})
+	}
+	for _, f := range w.outputSchema.Fields() {
+		rules.Fields = append(rules.Fields, fieldMetadata{f.Name, f.Type.String(), f.Nullable})
+	}
+	if w.rulesRef, err = w.writeMetadata("rules.json", rules); err != nil {
 		return w, err
 	}
 	success = true
@@ -364,12 +343,13 @@ func (w *Writer) WriteIssue(issue data.Issue) (err error) {
 	if err = w.writeIssue(issue); err != nil {
 		return err
 	}
-	if issue.Scope == data.ScopeSchema && !w.schemaIssueStreamed(issue) {
+	key := schemaIssueKey{scope: issue.Scope, code: issue.Code, column: issue.Column, reason: issue.Reason}
+	if issue.Scope == data.ScopeSchema && !slices.Contains(w.streamedSchema, key) {
 		if err = w.budget.Reserve(schemaIssueIdentityCharge, "streamed schema issue identity"); err != nil {
 			return err
 		}
 		w.charge += schemaIssueIdentityCharge
-		w.streamedSchema = append(w.streamedSchema, issueIdentity(issue))
+		w.streamedSchema = append(w.streamedSchema, key)
 	}
 	return nil
 }
@@ -440,7 +420,7 @@ func (w *Writer) WriteBatch(batch *data.Batch, result *data.Result) (err error) 
 		if !bucket.Valid() {
 			return fmt.Errorf("unknown row bucket %v", bucket)
 		}
-		kind := kindFor(bucket)
+		kind := partKind(bucket)
 		if err = addCount(&w.evaluated[kind], 1, "evaluated rows"); err != nil {
 			return err
 		}
@@ -504,7 +484,7 @@ func (w *Writer) Complete(summary *data.Summary, beforeCommit ...func(*data.Summ
 		return "", err
 	}
 	for _, issue := range summary.SchemaIssues {
-		if w.schemaIssueStreamed(issue) {
+		if slices.Contains(w.streamedSchema, schemaIssueKey{scope: issue.Scope, code: issue.Code, column: issue.Column, reason: issue.Reason}) {
 			continue
 		}
 		if err = w.writeIssue(issue); err != nil {
@@ -522,7 +502,14 @@ func (w *Writer) Complete(summary *data.Summary, beforeCommit ...func(*data.Summ
 		}
 	}
 	for kind := range partKind(numPartKinds) {
-		expected := w.countsFor(kind)
+		// Ledger and issue counts are records, not logical rows. Each accepted line
+		// updates its family counter, independently of artifact finalization.
+		expected := w.ledgerCounts[kind]
+		if kind.isRowKind() {
+			expected = w.counts[kind]
+		} else if kind == kindRejects {
+			expected = w.rejectsEmitted
+		}
 		if w.artifactCounts[kind] != expected {
 			return "", fmt.Errorf("%s artifact count %d does not match emitted count %d", kind, w.artifactCounts[kind], expected)
 		}

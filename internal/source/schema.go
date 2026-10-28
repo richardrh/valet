@@ -396,7 +396,17 @@ func inspectSchemaObject(ctx context.Context, d *Dataset, report *SchemaReport, 
 					}
 				}
 			} else {
-				types := schemaCheckTypes(check.Params["columns"])
+				types, ok := check.Params["columns"].(map[string]string)
+				if !ok {
+					types = make(map[string]string)
+					if values, ok := check.Params["columns"].(map[string]any); ok {
+						for name, v := range values {
+							if typ, ok := v.(string); ok {
+								types[name] = typ
+							}
+						}
+					}
+				}
 				names := make([]string, 0, len(types))
 				for name := range types {
 					names = append(names, name)
@@ -463,36 +473,6 @@ func schemaType(typ arrow.DataType) string {
 	}
 }
 
-func schemaCheckNames(value any) []string {
-	if names, ok := value.([]string); ok {
-		return names
-	}
-	var names []string
-	if values, ok := value.([]any); ok {
-		for _, v := range values {
-			if name, ok := v.(string); ok {
-				names = append(names, name)
-			}
-		}
-	}
-	return names
-}
-
-func schemaCheckTypes(value any) map[string]string {
-	if types, ok := value.(map[string]string); ok {
-		return types
-	}
-	types := make(map[string]string)
-	if values, ok := value.(map[string]any); ok {
-		for name, v := range values {
-			if typ, ok := v.(string); ok {
-				types[name] = typ
-			}
-		}
-	}
-	return types
-}
-
 func schemaCheckBool(params map[string]any, name string, fallback bool) bool {
 	if value, ok := params[name].(bool); ok {
 		return value
@@ -516,7 +496,18 @@ func schemaTypesEqual(actual, target arrow.DataType) bool {
 
 func schemaOperandNames(params map[string]any, ruleColumn string) []string {
 	if value, ok := params["columns"]; ok {
-		return schemaCheckNames(value)
+		if names, ok := value.([]string); ok {
+			return names
+		}
+		var names []string
+		if values, ok := value.([]any); ok {
+			for _, v := range values {
+				if name, ok := v.(string); ok {
+					names = append(names, name)
+				}
+			}
+		}
+		return names
 	}
 	name, _ := params["column"].(string)
 	if name == "" {

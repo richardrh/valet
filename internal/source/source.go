@@ -70,30 +70,6 @@ type Reader interface {
 	Close() error
 }
 
-// Option configures New.
-type Option func(*options)
-
-type options struct {
-	logger *slog.Logger
-	plan   bool
-}
-
-// WithLogger sets the logger for discovery, inference and Parquet safety
-// scan events. Row values are never logged.
-func WithLogger(l *slog.Logger) Option {
-	return func(o *options) {
-		if l != nil {
-			o.logger = l
-		}
-	}
-}
-
-// WithPlan limits discovery to metadata/sample work that cannot publish a
-// result. In particular, Parquet range handles skip close-time content digests.
-func WithPlan() Option {
-	return func(o *options) { o.plan = true }
-}
-
 type field struct {
 	name    string
 	options config.Column
@@ -242,11 +218,14 @@ func positiveOr[T int | int64](v, fallback T) T {
 }
 
 // New discovers the configured objects and freezes the dataset schema, either
-// from input.schema or by inspecting headers and sampling records.
-func New(ctx context.Context, cfg *config.Config, store *storage.Store, budget *resource.Budget, opts ...Option) (*Dataset, error) {
-	o := options{logger: slog.New(slog.DiscardHandler)}
-	for _, opt := range opts {
-		opt(&o)
+// from input.schema or by inspecting headers and sampling records. A nil logger
+// discards discovery, inference and Parquet safety scan events; row values are
+// never logged. plan limits discovery to metadata/sample work that cannot
+// publish a result; in particular, Parquet range handles skip close-time
+// content digests.
+func New(ctx context.Context, cfg *config.Config, store *storage.Store, budget *resource.Budget, logger *slog.Logger, plan bool) (*Dataset, error) {
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
 	}
 	kind, err := parseInputKind(cfg.Input.Type)
 	if err != nil {
@@ -255,14 +234,14 @@ func New(ctx context.Context, cfg *config.Config, store *storage.Store, budget *
 	d := &Dataset{
 		cfg:               cfg,
 		kind:              kind,
-		log:               o.logger,
-		plan:              o.plan,
+		log:               logger,
+		plan:              plan,
 		store:             store,
 		budget:            budget,
 		recordLimit:       positiveOr(cfg.RecordBytes(), defaultRecordBytes),
 		batchTarget:       positiveOr(cfg.BatchBytes(), defaultBatchBytes),
 		maxDepth:          positiveOr(cfg.Execution.MaxDepth, defaultMaxDepth),
-		statisticsPending: kind == inputParquet && cfg.Input.Parquet.Statistics == "trusted" && !o.plan,
+		statisticsPending: kind == inputParquet && cfg.Input.Parquet.Statistics == "trusted" && !plan,
 	}
 	complete := false
 	defer func() {

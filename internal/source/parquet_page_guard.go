@@ -139,7 +139,27 @@ func readGuardedPageHeader(ctx context.Context, r io.Reader, limit int) (guarded
 					h.compressedV2, e = c.boolean(kind)
 					return e
 				}
-				value := h.subHeaderField(id, field)
+				var value *int64
+				switch {
+				case field == dataValuesField:
+					value = &h.values
+				case id != pageDataV2HeaderField && field == dataEncodingField:
+					value = &h.encoding
+				case id == pageDataHeaderField && field == dataDefEncodingFld:
+					value = &h.definitionEncoding
+				case id == pageDataHeaderField && field == dataRepEncodingFld:
+					value = &h.repetitionEncoding
+				case id == pageDataV2HeaderField && field == v2NullsField:
+					value = &h.nulls
+				case id == pageDataV2HeaderField && field == v2RowsField:
+					value = &h.rows
+				case id == pageDataV2HeaderField && field == v2EncodingField:
+					value = &h.encoding
+				case id == pageDataV2HeaderField && field == v2DefBytesField:
+					value = &h.definitionBytes
+				case id == pageDataV2HeaderField && field == v2RepBytesField:
+					value = &h.repetitionBytes
+				}
 				if value == nil {
 					return c.skip(kind, 2)
 				}
@@ -167,387 +187,288 @@ func readGuardedPageHeader(ctx context.Context, r io.Reader, limit int) (guarded
 	return h, c.pos(), nil
 }
 
-// subHeaderField maps an integer field of the given sub-header to its slot,
-// or nil when the field is not tracked.
-func (h *guardedPageHeader) subHeaderField(subHeader, field int) *int64 {
-	switch subHeader {
-	case pageDataHeaderField:
-		switch field {
-		case dataValuesField:
-			return &h.values
-		case dataEncodingField:
-			return &h.encoding
-		case dataDefEncodingFld:
-			return &h.definitionEncoding
-		case dataRepEncodingFld:
-			return &h.repetitionEncoding
-		}
-	case pageDictHeaderField:
-		switch field {
-		case dataValuesField:
-			return &h.values
-		case dataEncodingField:
-			return &h.encoding
-		}
-	case pageDataV2HeaderField:
-		switch field {
-		case dataValuesField:
-			return &h.values
-		case v2NullsField:
-			return &h.nulls
-		case v2RowsField:
-			return &h.rows
-		case v2EncodingField:
-			return &h.encoding
-		case v2DefBytesField:
-			return &h.definitionBytes
-		case v2RepBytesField:
-			return &h.repetitionBytes
-		}
-	}
-	return nil
-}
-
 // validatePages verifies one row group before any typed decoder can consume it.
 // The verified uncompressed pages are retained in a bounded worker-owned stream;
 // Arrow consumes that stream without rereading or decompressing original pages.
-func (p *parquetInput) validatePages(ctx context.Context, fileSize int64) error {
+func (p *parquetInput) validatePages(ctx context.Context) error {
 	pageLimit := max(p.d.recordLimit, p.d.batchTarget)
 	headerLimit := min(pageLimit, int64(maxPageHeaderBytes))
 	pageStates, dictStates := p.pageStates, p.dictStates
-	for group := p.guardGroup; group < p.guardGroup+1; group++ {
-		rg := p.file.MetaData().RowGroup(group)
-		if rg.NumRows() < 0 {
-			return errors.New("negative Parquet row-group row count")
+	rg := p.file.MetaData().RowGroup(p.guardGroup)
+	for column := range rg.NumColumns() {
+		chunk, e := rg.ColumnChunk(column)
+		if e != nil {
+			return e
 		}
-		if rg.NumColumns() != len(p.header) {
-			return errors.New("row-group column count differs from schema")
-		}
-		for column := range rg.NumColumns() {
-			chunk, e := rg.ColumnChunk(column)
-			if e != nil {
+		normalized := p.bridge.RowGroups[0].Columns[column].MetaData
+		normalizedStart := int64(len(p.verified))
+		normalized.DataPageOffset = normalizedStart
+		normalized.DictionaryPageOffset = nil
+		descriptor := p.file.MetaData().Schema.Column(column)
+		// validateParquetStructure has already checked this chunk's type,
+		// levels, codec, location, and counts against the payload bounds.
+		codec := chunk.Compression()
+		if codec == compress.Codecs.Zstd && p.decoder == nil {
+			if e = p.reserve(resource.ParquetCodecWorkspace, "Parquet Zstd workspace"); e != nil {
 				return e
 			}
-			normalized := p.bridge.RowGroups[0].Columns[column].MetaData
-			normalizedStart := int64(len(p.verified))
-			normalized.DataPageOffset = normalizedStart
-			normalized.DictionaryPageOffset = nil
-			descriptor := p.file.MetaData().Schema.Column(column)
-			if chunk.Type() != descriptor.PhysicalType() {
-				return errors.New("Parquet chunk physical type differs from schema")
+			p.decoder = &resource.ParquetDecoder{}
+		}
+		start := chunk.DataPageOffset()
+		dictionaryOffset := chunk.DictionaryPageOffset()
+		if dictionaryOffset > 0 {
+			if start == 0 && chunk.NumValues() == 0 {
+				// Empty dictionary-encoded chunks may contain only a
+				// dictionary page and use zero for the absent data page.
+				start = dictionaryOffset
+			} else {
+				start = min(start, dictionaryOffset)
 			}
-			if chunk.FilePath() != "" {
-				return errors.New("external Parquet column chunks are unsupported")
+		}
+		size := chunk.TotalCompressedSize()
+		if size == 0 && chunk.NumValues() == 0 {
+			continue
+		}
+		section := io.NewSectionReader(p.handle, start, size)
+		input := bufio.NewReaderSize(section, pageChunkBufferBytes)
+		remaining := size
+		var total, dictCount int64
+		dictCount = -1
+		ensurePage := func(n int64) error {
+			if n < 0 {
+				return errors.New("Parquet page state accounting overflow")
 			}
-			if chunk.CryptoMetadata() != nil {
-				return errors.New("encrypted Parquet column chunks are unsupported")
-			}
-			codec := chunk.Compression()
-			if codec != compress.Codecs.Uncompressed && codec != compress.Codecs.Snappy && codec != compress.Codecs.Zstd {
-				return fmt.Errorf("unsupported Parquet codec %s", codec)
-			}
-			if codec == compress.Codecs.Zstd && p.decoder == nil {
-				if e = p.reserve(resource.ParquetCodecWorkspace, "Parquet Zstd workspace"); e != nil {
+			if n > pageStates[column] {
+				if e := p.reserve(n-pageStates[column], "Parquet verified page decoder state"); e != nil {
 					return e
 				}
-				p.decoder, e = resource.NewParquetDecoder()
-				if e != nil {
+				pageStates[column] = n
+			}
+			return nil
+		}
+		ensureDict := func(n int64) error {
+			if n < 0 {
+				return errors.New("Parquet dictionary state accounting overflow")
+			}
+			if n > dictStates[column] {
+				if e := p.reserve(n-dictStates[column], "Parquet verified dictionary state"); e != nil {
 					return e
 				}
+				dictStates[column] = n
 			}
-			if descriptor.MaxRepetitionLevel() != 0 || descriptor.MaxDefinitionLevel() > 1 {
-				return errors.New("nested Parquet levels are unsupported")
+			return nil
+		}
+		for remaining > 0 {
+			if e = ctx.Err(); e != nil {
+				return e
 			}
-			if chunk.NumValues() != rg.NumRows() {
-				return errors.New("flat Parquet chunk count differs from row-group count")
+			h, headerBytes, e := readGuardedPageHeader(ctx, input, int(min(remaining, headerLimit)))
+			if e != nil {
+				return fmt.Errorf("invalid Parquet page header: %w", e)
 			}
-			start := chunk.DataPageOffset()
-			dictionaryOffset := chunk.DictionaryPageOffset()
-			if dictionaryOffset > 0 {
-				if start == 0 && chunk.NumValues() == 0 {
-					// Empty dictionary-encoded chunks may contain only a
-					// dictionary page and use zero for the absent data page.
-					start = dictionaryOffset
-				} else {
-					start = min(start, dictionaryOffset)
+			remaining -= int64(headerBytes)
+			if h.compressed > pageLimit || h.uncompressed > pageLimit {
+				return &resource.ResourceLimitError{
+					Phase:     "Parquet page declared size",
+					Limit:     p.d.budget.Limit(),
+					Used:      p.d.budget.Used(),
+					Requested: max(h.compressed, h.uncompressed),
 				}
 			}
-			size := chunk.TotalCompressedSize()
-			if size == 0 && chunk.NumValues() == 0 {
-				continue
+			if h.compressed > remaining {
+				return errors.New("Parquet page exceeds column chunk boundary")
 			}
-			if start < 4 || size < 0 || start > fileSize || size > fileSize-start {
-				return errors.New("Parquet column chunk lies outside the object")
+			headerState := int64(headerBytes)*pageHeaderExpansion + pageDecoderFixedBytes
+			if e = ensurePage(headerState); e != nil {
+				return e
 			}
-			section := io.NewSectionReader(p.handle, start, size)
-			input := bufio.NewReaderSize(section, pageChunkBufferBytes)
-			remaining := size
-			var total, dictCount int64
-			dictCount = -1
-			ensurePage := func(n int64) error {
-				if n < 0 {
-					return errors.New("Parquet page state accounting overflow")
-				}
-				if n > pageStates[column] {
-					if e := p.reserve(n-pageStates[column], "Parquet verified page decoder state"); e != nil {
-						return e
-					}
-					pageStates[column] = n
-				}
-				return nil
-			}
-			ensureDict := func(n int64) error {
-				if n < 0 {
-					return errors.New("Parquet dictionary state accounting overflow")
-				}
-				if n > dictStates[column] {
-					if e := p.reserve(n-dictStates[column], "Parquet verified dictionary state"); e != nil {
-						return e
-					}
-					dictStates[column] = n
-				}
-				return nil
-			}
-			for remaining > 0 {
-				if e = ctx.Err(); e != nil {
-					return e
-				}
-				h, headerBytes, e := readGuardedPageHeader(ctx, input, int(min(remaining, headerLimit)))
-				if e != nil {
-					return fmt.Errorf("invalid Parquet page header: %w", e)
-				}
-				remaining -= int64(headerBytes)
-				if h.compressed > pageLimit || h.uncompressed > pageLimit {
-					return &resource.ResourceLimitError{
-						Phase:     "Parquet page declared size",
-						Limit:     p.d.budget.Limit(),
-						Used:      p.d.budget.Used(),
-						Requested: max(h.compressed, h.uncompressed),
-					}
-				}
-				if h.compressed > remaining {
-					return errors.New("Parquet page exceeds column chunk boundary")
-				}
-				headerState := int64(headerBytes)*pageHeaderExpansion + pageDecoderFixedBytes
-				if e = ensurePage(headerState); e != nil {
-					return e
-				}
-				if h.kind == pageIndex {
-					if e = p.readCompressed(input, h); e != nil {
-						return e
-					}
-					remaining -= h.compressed
-					continue
-				}
-				if chunk.DataPageOffset() == 0 && h.kind != pageDictionary {
-					return errors.New("Parquet data page has no declared offset")
-				}
-				if h.values < 0 || h.encoding < 0 {
-					return errors.New("negative Parquet page count or encoding")
-				}
-				encoding := parquet.Encoding(h.encoding)
-				if h.kind == pageDictionary {
-					if dictCount >= 0 || total != 0 {
-						return errors.New("misplaced or duplicate dictionary page")
-					}
-					plain := encoding == parquet.Encodings.Plain || encoding == parquet.Encodings.PlainDict
-					if chunk.Type() == parquet.Types.Boolean || !plain {
-						return errors.New("unsupported dictionary type or encoding")
-					}
-				} else {
-					if h.values > chunk.NumValues()-total {
-						return errors.New("page values exceed chunk count")
-					}
-					if e = validatePageEncoding(chunk.Type(), encoding); e != nil {
-						return e
-					}
-				}
-				base := h.values*pageValueStateBytes + h.uncompressed*pageUncompressedFactor + headerState
-				extraState := int64(0)
-				ensure := func(extra int64) error {
-					if e := ctx.Err(); e != nil {
-						return e
-					}
-					if extra < 0 || extra > math.MaxInt64-base {
-						return errors.New("Parquet decoder state overflow")
-					}
-					extraState = max(extraState, extra)
-					return ensurePage(base + extraState)
-				}
-				if e = ensure(0); e != nil {
-					return e
-				}
-				body := pageBody{
-					header:        h,
-					codec:         chunk.Compression(),
-					physical:      chunk.Type(),
-					fixedWidth:    descriptor.TypeLength(),
-					maxDefinition: descriptor.MaxDefinitionLevel(),
-					dictCount:     dictCount,
-					ensure:        ensure,
-				}
-				pageStart := int64(len(p.verified))
-				if h.kind == pageDictionary {
-					normalized.DictionaryPageOffset = &pageStart
-				} else if total == 0 {
-					normalized.DataPageOffset = pageStart
-				}
-				if e = p.validatePageBody(input, body); e != nil {
+			if h.kind == pageIndex {
+				if e = p.readCompressed(input, h); e != nil {
 					return e
 				}
 				remaining -= h.compressed
-				if h.kind == pageDictionary {
-					dictCount = h.values
-					dictState := h.values*dictValueStateBytes + h.uncompressed*dictUncompressedFactor + pageDecoderFixedBytes
-					if e = ensureDict(dictState); e != nil {
-						return e
-					}
-				} else {
-					total += h.values
-				}
+				continue
 			}
-			if total != chunk.NumValues() {
-				return errors.New("Parquet page counts do not match column metadata")
+			if chunk.DataPageOffset() == 0 && h.kind != pageDictionary {
+				return errors.New("Parquet data page has no declared offset")
 			}
-			normalized.TotalCompressedSize = int64(len(p.verified)) - normalizedStart
-			normalized.TotalUncompressedSize = normalized.TotalCompressedSize
-		}
-	}
-	return nil
-}
-
-// pageBody describes one page whose header has been verified and whose
-// compressed payload is next on the column chunk reader.
-type pageBody struct {
-	header        guardedPageHeader
-	codec         compress.Compression
-	physical      parquet.Type
-	fixedWidth    int
-	maxDefinition int16
-	// dictCount is the verified dictionary cardinality, or -1 before a dictionary page.
-	dictCount int64
-	// ensure reserves extra decoder state beyond the page's base charge.
-	ensure func(int64) error
-}
-
-func (p *parquetInput) validatePageBody(r io.Reader, body pageBody) error {
-	h := body.header
-	if e := p.readCompressed(r, h); e != nil {
-		return e
-	}
-	compressed := p.compressed
-	if e := p.resizeBuffer(&p.decompressed, int(h.uncompressed), "Parquet verifier decompressed buffer", false); e != nil {
-		return e
-	}
-	data := p.decompressed
-	levels := int64(0)
-	if h.kind == pageDataV2 {
-		if h.definitionBytes < 0 || h.repetitionBytes != 0 || h.nulls < 0 || h.nulls > h.values || h.rows != h.values {
-			return errors.New("invalid flat Parquet V2 level counts")
-		}
-		levels = h.definitionBytes
-		if levels > h.compressed || levels > h.uncompressed {
-			return errors.New("Parquet V2 levels exceed page size")
-		}
-		copy(data[:levels], compressed[:levels])
-	}
-	if h.kind == pageDataV2 && !h.compressedV2 {
-		if h.compressed != h.uncompressed {
-			return errors.New("uncompressed V2 page size mismatch")
-		}
-		copy(data, compressed)
-	} else {
-		var decoded []byte
-		var e error
-		if p.decoder != nil {
-			decoded, e = p.decoder.Decode(body.codec, data[levels:], compressed[levels:])
-		} else {
-			codec, codecErr := compress.GetCodec(body.codec)
-			if codecErr != nil {
-				return codecErr
+			if h.values < 0 || h.encoding < 0 {
+				return errors.New("negative Parquet page count or encoding")
 			}
-			decoded, e = compress.Decode(codec, data[levels:], compressed[levels:])
-		}
-		if e != nil {
-			return fmt.Errorf("invalid Parquet compressed page: %w", e)
-		}
-		if len(decoded) != len(data)-int(levels) {
-			return errors.New("decompressed Parquet page size mismatch")
-		}
-	}
-	if h.kind == pageDictionary {
-		if e := validatePlain(data, h.values, body.physical, body.fixedWidth, p.d.recordLimit); e != nil {
-			return e
-		}
-		return p.appendVerifiedPage(h, data)
-	}
-	values := h.values
-	offset := int64(0)
-	if h.kind == pageData {
-		repetition := parquet.Encoding(h.repetitionEncoding)
-		if repetition != parquet.Encodings.RLE && repetition != parquet.Encodings.BitPacked {
-			return errors.New("unsupported repetition-level encoding")
-		}
-		if body.maxDefinition > 0 {
-			switch parquet.Encoding(h.definitionEncoding) {
-			case parquet.Encodings.RLE:
-				if len(data) < 4 {
-					return io.ErrUnexpectedEOF
+			encoding := parquet.Encoding(h.encoding)
+			if h.kind == pageDictionary {
+				if dictCount >= 0 || total != 0 {
+					return errors.New("misplaced or duplicate dictionary page")
 				}
-				n := int64(binary.LittleEndian.Uint32(data))
-				if n > int64(len(data)-4) {
-					return errors.New("definition levels exceed page payload")
+				plain := encoding == parquet.Encodings.Plain || encoding == parquet.Encodings.PlainDict
+				if chunk.Type() == parquet.Types.Boolean || !plain {
+					return errors.New("unsupported dictionary type or encoding")
 				}
-				ones, e := scanHybrid(data[4:4+n], 1, h.values, 1)
-				if e != nil {
+			} else {
+				if h.values > chunk.NumValues()-total {
+					return errors.New("page values exceed chunk count")
+				}
+				if e = validatePageEncoding(chunk.Type(), encoding); e != nil {
 					return e
 				}
-				values = ones
-				offset = 4 + n
-			case parquet.Encodings.BitPacked:
-				n := (h.values + 7) / 8
-				if n > int64(len(data)) {
-					return io.ErrUnexpectedEOF
-				}
-				values = 0
-				for i := range h.values {
-					values += int64(packedValue(data[:n], i, 1))
-				}
-				offset = n
-			default:
-				return errors.New("unsupported definition-level encoding")
 			}
-		}
-	} else {
-		offset = levels
-		if body.maxDefinition == 0 {
-			if levels != 0 || h.nulls != 0 {
-				return errors.New("required V2 field contains null levels")
+			base := h.values*pageValueStateBytes + h.uncompressed*pageUncompressedFactor + headerState
+			extraState := int64(0)
+			ensure := func(extra int64) error {
+				if e := ctx.Err(); e != nil {
+					return e
+				}
+				if extra < 0 || extra > math.MaxInt64-base {
+					return errors.New("Parquet decoder state overflow")
+				}
+				extraState = max(extraState, extra)
+				return ensurePage(base + extraState)
 			}
-		} else {
-			ones, e := scanHybrid(data[:levels], 1, h.values, 1)
-			if e != nil {
+			if e = ensure(0); e != nil {
 				return e
 			}
-			values = ones
-			if h.values-values != h.nulls {
-				return errors.New("V2 null count differs from levels")
+			pageStart := int64(len(p.verified))
+			if h.kind == pageDictionary {
+				normalized.DictionaryPageOffset = &pageStart
+			} else if total == 0 {
+				normalized.DataPageOffset = pageStart
+			}
+			if e := p.readCompressed(input, h); e != nil {
+				return e
+			}
+			compressed := p.compressed
+			if e := p.resizeBuffer(&p.decompressed, int(h.uncompressed), "Parquet verifier decompressed buffer", false); e != nil {
+				return e
+			}
+			data := p.decompressed
+			levels := int64(0)
+			if h.kind == pageDataV2 {
+				if h.definitionBytes < 0 || h.repetitionBytes != 0 || h.nulls < 0 || h.nulls > h.values || h.rows != h.values {
+					return errors.New("invalid flat Parquet V2 level counts")
+				}
+				levels = h.definitionBytes
+				if levels > h.compressed || levels > h.uncompressed {
+					return errors.New("Parquet V2 levels exceed page size")
+				}
+				copy(data[:levels], compressed[:levels])
+			}
+			if h.kind == pageDataV2 && !h.compressedV2 {
+				if h.compressed != h.uncompressed {
+					return errors.New("uncompressed V2 page size mismatch")
+				}
+				copy(data, compressed)
+			} else {
+				var decoded []byte
+				var e error
+				if p.decoder != nil {
+					decoded, e = p.decoder.Decode(codec, data[levels:], compressed[levels:])
+				} else {
+					decompressor, codecErr := compress.GetCodec(codec)
+					if codecErr != nil {
+						return codecErr
+					}
+					decoded, e = compress.Decode(decompressor, data[levels:], compressed[levels:])
+				}
+				if e != nil {
+					return fmt.Errorf("invalid Parquet compressed page: %w", e)
+				}
+				if len(decoded) != len(data)-int(levels) {
+					return errors.New("decompressed Parquet page size mismatch")
+				}
+			}
+			if h.kind == pageDictionary {
+				if e := validatePlain(data, h.values, chunk.Type(), descriptor.TypeLength(), p.d.recordLimit); e != nil {
+					return e
+				}
+			} else {
+				values := h.values
+				offset := int64(0)
+				if h.kind == pageData {
+					repetition := parquet.Encoding(h.repetitionEncoding)
+					if repetition != parquet.Encodings.RLE && repetition != parquet.Encodings.BitPacked {
+						return errors.New("unsupported repetition-level encoding")
+					}
+					if descriptor.MaxDefinitionLevel() > 0 {
+						switch parquet.Encoding(h.definitionEncoding) {
+						case parquet.Encodings.RLE:
+							if len(data) < 4 {
+								return io.ErrUnexpectedEOF
+							}
+							n := int64(binary.LittleEndian.Uint32(data))
+							if n > int64(len(data)-4) {
+								return errors.New("definition levels exceed page payload")
+							}
+							ones, e := scanHybrid(data[4:4+n], 1, h.values, 1)
+							if e != nil {
+								return e
+							}
+							values = ones
+							offset = 4 + n
+						case parquet.Encodings.BitPacked:
+							n := (h.values + 7) / 8
+							if n > int64(len(data)) {
+								return io.ErrUnexpectedEOF
+							}
+							values = 0
+							for i := range h.values {
+								values += int64(packedValue(data[:n], i, 1))
+							}
+							offset = n
+						default:
+							return errors.New("unsupported definition-level encoding")
+						}
+					}
+				} else {
+					offset = levels
+					if descriptor.MaxDefinitionLevel() == 0 {
+						if levels != 0 || h.nulls != 0 {
+							return errors.New("required V2 field contains null levels")
+						}
+					} else {
+						ones, e := scanHybrid(data[:levels], 1, h.values, 1)
+						if e != nil {
+							return e
+						}
+						values = ones
+						if h.values-values != h.nulls {
+							return errors.New("V2 null count differs from levels")
+						}
+					}
+				}
+				if e := validateEncodedValues(encodedValues{
+					data:      data[offset:],
+					count:     values,
+					physical:  chunk.Type(),
+					encoding:  parquet.Encoding(h.encoding),
+					fixed:     descriptor.TypeLength(),
+					dictCount: dictCount,
+					maxRecord: p.d.recordLimit,
+					ensure:    ensure,
+				}); e != nil {
+					return e
+				}
+			}
+			if e := p.appendVerifiedPage(h, data); e != nil {
+				return e
+			}
+			remaining -= h.compressed
+			if h.kind == pageDictionary {
+				dictCount = h.values
+				dictState := h.values*dictValueStateBytes + h.uncompressed*dictUncompressedFactor + pageDecoderFixedBytes
+				if e = ensureDict(dictState); e != nil {
+					return e
+				}
+			} else {
+				total += h.values
 			}
 		}
+		if total != chunk.NumValues() {
+			return errors.New("Parquet page counts do not match column metadata")
+		}
+		normalized.TotalCompressedSize = int64(len(p.verified)) - normalizedStart
+		normalized.TotalUncompressedSize = normalized.TotalCompressedSize
 	}
-	if e := validateEncodedValues(encodedValues{
-		data:      data[offset:],
-		count:     values,
-		physical:  body.physical,
-		encoding:  parquet.Encoding(h.encoding),
-		fixed:     body.fixedWidth,
-		dictCount: body.dictCount,
-		maxRecord: p.d.recordLimit,
-		ensure:    body.ensure,
-	}); e != nil {
-		return e
-	}
-	return p.appendVerifiedPage(h, data)
+	return nil
 }
 
 // resizeBuffer reserves both old and replacement capacities before growth.

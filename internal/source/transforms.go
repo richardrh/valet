@@ -13,61 +13,54 @@ import (
 	"github.com/richardrh/valet/internal/diagnostics"
 )
 
-// renameMapping accumulates one transform's source -> target names.
-type renameMapping struct {
-	d       *Dataset
-	exclude []string
-	mapping map[string]string
-}
-
-func (m *renameMapping) add(from, to string) error {
-	if to == "" || to == "#N/A" || slices.Contains(m.exclude, from) {
-		return nil
-	}
-	if old, ok := m.mapping[from]; ok {
-		if old != to {
-			return fmt.Errorf("conflicting mapping for column %q", from)
-		}
-		return nil
-	}
-	if err := m.d.reserve(int64(len(from)+len(to)+renameEntryBytes), "rename mapping"); err != nil {
-		return err
-	}
-	// Clone so the map does not pin the decoder's whole record string.
-	m.mapping[strings.Clone(from)] = strings.Clone(to)
-	return nil
-}
-
 func (d *Dataset) loadTransforms(ctx context.Context) error {
 	for _, t := range d.cfg.Transforms {
-		m := &renameMapping{d: d, exclude: t.ExcludeKeys, mapping: map[string]string{}}
+		// mapping accumulates this transform's source -> target names.
+		mapping := map[string]string{}
+		add := func(from, to string) error {
+			if to == "" || to == "#N/A" || slices.Contains(t.ExcludeKeys, from) {
+				return nil
+			}
+			if old, ok := mapping[from]; ok {
+				if old != to {
+					return fmt.Errorf("conflicting mapping for column %q", from)
+				}
+				return nil
+			}
+			if err := d.reserve(int64(len(from)+len(to)+renameEntryBytes), "rename mapping"); err != nil {
+				return err
+			}
+			// Clone so the map does not pin the decoder's whole record string.
+			mapping[strings.Clone(from)] = strings.Clone(to)
+			return nil
+		}
 		var err error
 		switch t.Type {
 		case "rename_columns":
 			if t.Mapping != nil {
 				for from, to := range t.Mapping {
-					if err = m.add(from, to); err != nil {
+					if err = add(from, to); err != nil {
 						return err
 					}
 				}
 			} else {
-				err = d.loadMappingFile(ctx, t, m)
+				err = d.loadMappingFile(ctx, t, add)
 			}
 		case "schema_rename":
-			err = d.loadSchemaRename(ctx, t, m)
+			err = d.loadSchemaRename(ctx, t, add)
 		default:
 			err = fmt.Errorf("unsupported transform %q", t.Type)
 		}
 		if err != nil {
 			return err
 		}
-		d.transforms = append(d.transforms, m.mapping)
+		d.transforms = append(d.transforms, mapping)
 	}
 	return nil
 }
 
 // loadMappingFile reads a comma-separated, header-bearing CSV mapping file.
-func (d *Dataset) loadMappingFile(ctx context.Context, t config.Transform, m *renameMapping) (err error) {
+func (d *Dataset) loadMappingFile(ctx context.Context, t config.Transform, add func(from, to string) error) (err error) {
 	obj, err := d.store.Stat(ctx, t.MappingFile)
 	if err != nil {
 		return err
@@ -92,7 +85,7 @@ func (d *Dataset) loadMappingFile(ctx context.Context, t config.Transform, m *re
 		if err != nil {
 			return err
 		}
-		if err = m.add(rec.values[t.SourceCol].text, rec.values[target].text); err != nil {
+		if err = add(rec.values[t.SourceCol].text, rec.values[target].text); err != nil {
 			return err
 		}
 	}
@@ -101,7 +94,7 @@ func (d *Dataset) loadMappingFile(ctx context.Context, t config.Transform, m *re
 // loadSchemaRename streams a {"<key>": {"from": "to", ...}, ...} document and
 // applies the entries under t.SourceKey. The whole document is one record for
 // max_record_bytes.
-func (d *Dataset) loadSchemaRename(ctx context.Context, t config.Transform, m *renameMapping) (err error) {
+func (d *Dataset) loadSchemaRename(ctx context.Context, t config.Transform, add func(from, to string) error) (err error) {
 	obj, err := d.store.Stat(ctx, t.SchemaFile)
 	if err != nil {
 		return err
@@ -122,7 +115,7 @@ func (d *Dataset) loadSchemaRename(ctx context.Context, t config.Transform, m *r
 	if err = workspace.growTo(jsonRecordCopies * size); err != nil {
 		return err
 	}
-	err = parseSchemaMapping(jsontext.NewDecoder(src.limiter), t.SourceKey, m.add)
+	err = parseSchemaMapping(jsontext.NewDecoder(src.limiter), t.SourceKey, add)
 	if src.limiter.exceeded || src.limiter.delivered > d.recordLimit {
 		// The rename document is configuration, not dataset input.
 		return diagnostics.PublicError(fmt.Errorf("transforms schema_file %s exceeds execution.max_record_bytes (%d); raise the limit or split the file", t.SchemaFile, d.recordLimit))

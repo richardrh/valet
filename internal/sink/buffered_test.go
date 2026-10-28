@@ -297,7 +297,7 @@ func TestBufferedParquetCancellationReleasesActiveGroup(t *testing.T) {
 	batch, result := passOnlyFixture(t)
 	defer batch.Release()
 	defer result.Release()
-	w, err := newWriter(ctx, testConfig(t, "parquet"), store, budget, "run", batch.Record.Schema())
+	w, err := New(ctx, testConfig(t, "parquet"), store, budget, "run", batch.Record.Schema(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,7 +356,7 @@ func TestCompletedStorageDigestControlsPublication(t *testing.T) {
 			batch, result := passOnlyFixture(t)
 			defer batch.Release()
 			defer result.Release()
-			w, err := newWriter(context.Background(), testConfig(t, "parquet"), store, budget, "run", batch.Record.Schema())
+			w, err := New(context.Background(), testConfig(t, "parquet"), store, budget, "run", batch.Record.Schema(), nil)
 			if err != nil {
 				t.Fatal(err)
 			}

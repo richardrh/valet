@@ -27,7 +27,7 @@ func testStore(t *testing.T, limit int64, endpoint string) (*Store, *resource.Bu
 	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(t.TempDir(), "absent"))
 	budget := resource.New(limit)
 	input := config.S3{Region: "us-east-1", Endpoint: endpoint, PathStyle: true}
-	store, err := New(context.Background(), input, config.S3{}, budget)
+	store, err := New(context.Background(), input, config.S3{}, budget, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +182,7 @@ func TestLocalRangeReplayDetectsMutation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err := store.OpenAt(context.Background(), obj)
+	r, err := store.OpenAt(context.Background(), obj, ReadVerified)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +202,7 @@ func TestLocalRangeReplayDetectsMutation(t *testing.T) {
 	if err = os.Chtimes(name, obj.ModTime, obj.ModTime); err != nil {
 		t.Fatal(err)
 	}
-	r, err = store.OpenAt(context.Background(), obj)
+	r, err = store.OpenAt(context.Background(), obj, ReadVerified)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +219,7 @@ func TestMetadataRangeCloseDoesNotDigestWholeFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reader, err := store.OpenAtMetadata(context.Background(), obj)
+	reader, err := store.OpenAt(context.Background(), obj, ReadMetadata)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +260,7 @@ func TestLocalPublicationAbortAndExistingOutput(t *testing.T) {
 		if string(got) != "complete" {
 			t.Errorf("published output = %q, want %q", got, "complete")
 		}
-		if err = store.Put(context.Background(), name, []byte("overwrite")); err == nil {
+		if err = putObject(context.Background(), store, name, []byte("overwrite")); err == nil {
 			t.Error("Put over existing output err = nil, want refusal")
 		}
 	})
@@ -683,7 +683,7 @@ func TestLocalReaderAtConcurrentRanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reader, err := store.OpenAt(context.Background(), obj)
+	reader, err := store.OpenAt(context.Background(), obj, ReadVerified)
 	if err != nil {
 		t.Fatal(err)
 	}

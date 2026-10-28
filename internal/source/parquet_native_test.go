@@ -73,7 +73,7 @@ func TestNativeBatchOutlivesReaderAndPreservesIntegers(t *testing.T) {
 	record.Release()
 
 	budget := resource.New(128 << 20)
-	store, err := storage.New(context.Background(), config.S3{}, config.S3{}, budget)
+	store, err := storage.New(context.Background(), config.S3{}, config.S3{}, budget, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestNativeBatchOutlivesReaderAndPreservesIntegers(t *testing.T) {
 		Source:    config.Source{URIs: []string{path}},
 		Execution: config.Execution{BatchTarget: "16KiB", MaxRecordBytes: "1MiB"},
 	}
-	ds, err := New(context.Background(), cfg, store, budget)
+	ds, err := New(context.Background(), cfg, store, budget, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,10 +282,10 @@ func TestParquetFixedWidthUsesPhysicalBytes(t *testing.T) {
 	if width != physicalRowBytes {
 		t.Fatalf("row width = %d, want %d", width, physicalRowBytes)
 	}
-	if err := validateNativeParquetRowWidth(record, 0, physicalRowBytes); err != nil {
+	if err := validateParquetRowWidth(record, 0, physicalRowBytes); err != nil {
 		t.Errorf("row width check at exact limit = %v, want nil", err)
 	}
-	if err := validateNativeParquetRowWidth(record, 0, physicalRowBytes-1); err == nil {
+	if err := validateParquetRowWidth(record, 0, physicalRowBytes-1); err == nil {
 		t.Error("row width check one byte below physical width = nil, want error")
 	}
 }

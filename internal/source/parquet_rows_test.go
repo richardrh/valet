@@ -80,7 +80,7 @@ func rowGroupDataset(t *testing.T, inputs [][]byte, budgetBytes int64, input con
 		}
 	}
 	budget := resource.New(budgetBytes)
-	store, err := storage.New(context.Background(), config.S3{}, config.S3{}, budget)
+	store, err := storage.New(context.Background(), config.S3{}, config.S3{}, budget, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func rowGroupDataset(t *testing.T, inputs [][]byte, budgetBytes int64, input con
 	cfg := &config.Config{Input: input, Source: config.Source{URIs: paths}, Execution: config.Execution{
 		Workers: 4, BatchTarget: "16KiB", MaxRecordBytes: "1MiB",
 	}}
-	dataset, err := New(context.Background(), cfg, store, budget)
+	dataset, err := New(context.Background(), cfg, store, budget, nil, false)
 	if err != nil {
 		_ = store.Close()
 		t.Fatal(err)
@@ -399,7 +399,7 @@ func TestParquetRejectsInconsistentOrOverflowingMetadataCounts(t *testing.T) {
 				t.Fatal(err)
 			}
 			budget := resource.New(128 << 20)
-			store, err := storage.New(context.Background(), config.S3{}, config.S3{}, budget)
+			store, err := storage.New(context.Background(), config.S3{}, config.S3{}, budget, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -422,7 +422,7 @@ func TestParquetRejectsInconsistentOrOverflowingMetadataCounts(t *testing.T) {
 				Source:    config.Source{URIs: []string{path}},
 				Execution: config.Execution{Workers: 4, BatchTarget: "16KiB", MaxRecordBytes: "1MiB"},
 			}
-			ds, err = New(context.Background(), cfg, store, budget)
+			ds, err = New(context.Background(), cfg, store, budget, nil, false)
 			if err == nil {
 				reader, openErr := ds.Open(context.Background())
 				err = openErr

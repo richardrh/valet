@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -32,9 +33,14 @@ func Load(ctx context.Context, path string) (*Config, error) {
 	if strings.Contains(path, "://") {
 		return nil, fmt.Errorf("pipeline document must be a local file")
 	}
-	format, err := pipelineDocumentFormat(path)
-	if err != nil {
-		return nil, err
+	var format string
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".yaml", ".yml":
+		format = "yaml"
+	case ".json":
+		format = "json"
+	default:
+		return nil, fmt.Errorf("pipeline document must use .yaml, .yml, or .json")
 	}
 	f, err := openPipelineFile(path)
 	if err != nil {
@@ -115,22 +121,36 @@ func Load(ctx context.Context, path string) (*Config, error) {
 		}
 	}
 	cfg.deriveDefaults()
-	cfg.resolvePaths()
+	resolve := func(path string) string {
+		if path == "" || path == "-" || filepath.IsAbs(path) || strings.Contains(path, "://") {
+			return path
+		}
+		return filepath.Join(cfg.BaseDir, path)
+	}
+	for i := range cfg.Source.URIs {
+		cfg.Source.URIs[i] = resolve(cfg.Source.URIs[i])
+	}
+	cfg.Source.Prefix = resolve(cfg.Source.Prefix)
+	cfg.Output.URI = resolve(cfg.Output.URI)
+	for i := range cfg.Transforms {
+		t := &cfg.Transforms[i]
+		t.MappingFile = resolve(t.MappingFile)
+		t.SchemaFile = resolve(t.SchemaFile)
+	}
+	for i := range cfg.Rules {
+		for j := range cfg.Rules[i].Checks {
+			p := cfg.Rules[i].Checks[j].Params
+			for _, k := range []string{"reference_file", "mapping_file", "schema_file"} {
+				if s, ok := p[k].(string); ok {
+					p[k] = resolve(s)
+				}
+			}
+		}
+	}
 	if err = substituteMessages(cfg.Rules, cfg.Context); err != nil {
 		return nil, err
 	}
 	return &cfg, nil
-}
-
-func pipelineDocumentFormat(path string) (string, error) {
-	switch strings.ToLower(filepath.Ext(path)) {
-	case ".yaml", ".yml":
-		return "yaml", nil
-	case ".json":
-		return "json", nil
-	default:
-		return "", fmt.Errorf("pipeline document must use .yaml, .yml, or .json")
-	}
 }
 
 func mappingValue(n *yaml.Node, key string) *yaml.Node {
@@ -391,35 +411,6 @@ func (c *Config) deriveDefaults() {
 	}
 }
 
-func (c *Config) resolvePaths() {
-	resolve := func(path string) string {
-		if path == "" || path == "-" || filepath.IsAbs(path) || strings.Contains(path, "://") {
-			return path
-		}
-		return filepath.Join(c.BaseDir, path)
-	}
-	for i := range c.Source.URIs {
-		c.Source.URIs[i] = resolve(c.Source.URIs[i])
-	}
-	c.Source.Prefix = resolve(c.Source.Prefix)
-	c.Output.URI = resolve(c.Output.URI)
-	for i := range c.Transforms {
-		t := &c.Transforms[i]
-		t.MappingFile = resolve(t.MappingFile)
-		t.SchemaFile = resolve(t.SchemaFile)
-	}
-	for i := range c.Rules {
-		for j := range c.Rules[i].Checks {
-			p := c.Rules[i].Checks[j].Params
-			for _, k := range []string{"reference_file", "mapping_file", "schema_file"} {
-				if s, ok := p[k].(string); ok {
-					p[k] = resolve(s)
-				}
-			}
-		}
-	}
-}
-
 var errExpandedMessageLimit = errors.New("expanded rule message exceeds configured bound")
 
 type boundedStringBuilder struct {
@@ -479,4 +470,141 @@ func substituteMessages(rules []Rule, contextValues map[string]any) error {
 		total += len(rules[i].Message)
 	}
 	return nil
+}
+
+// The generic node decoder uses float64. Restore floating numeric literals from
+// the syntax tree before any comparison can lose precision. json.Number keeps
+// numbers distinct from strings and round-trips through rules metadata exactly.
+func preserveNumbers(root *yaml.Node, c *Config) error {
+	var conditionNumbers func(n *yaml.Node, c *Condition) error
+	conditionNumbers = func(n *yaml.Node, c *Condition) error {
+		if c == nil {
+			return nil
+		}
+		if value := mappingValue(n, "value"); value != nil {
+			v, err := exactValue(value, c.Value)
+			if err != nil {
+				return err
+			}
+			c.Value = v
+		}
+		for _, entry := range []struct {
+			key      string
+			children []Condition
+		}{{"all", c.All}, {"any", c.Any}} {
+			if children := mappingValue(n, entry.key); children != nil {
+				for i, child := range children.Content {
+					if err := conditionNumbers(child, &entry.children[i]); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		if child := mappingValue(n, "not"); child != nil {
+			return conditionNumbers(child, c.Not)
+		}
+		return nil
+	}
+	if n := mappingValue(root, "context"); n != nil {
+		if _, err := exactValue(n, c.Context); err != nil {
+			return fmt.Errorf("context: %w", err)
+		}
+	}
+	if rules := mappingValue(root, "rules"); rules != nil {
+		for i, n := range rules.Content {
+			if checks := mappingValue(n, "checks"); checks != nil {
+				for j, check := range checks.Content {
+					params := c.Rules[i].Checks[j].Params
+					for k := 0; k < len(check.Content); k += 2 {
+						key := check.Content[k].Value
+						if key == "type" {
+							continue
+						}
+						value, err := exactValue(check.Content[k+1], params[key])
+						if err != nil {
+							return fmt.Errorf("rule %s argument %s: %w", c.Rules[i].Code, key, err)
+						}
+						params[key] = value
+					}
+				}
+			}
+			if when := mappingValue(n, "when"); when != nil {
+				if err := conditionNumbers(when, c.Rules[i].When); err != nil {
+					return fmt.Errorf("rule %s when: %w", c.Rules[i].Code, err)
+				}
+			}
+		}
+	}
+	if rules := mappingValue(root, "dataset_rules"); rules != nil {
+		for i, n := range rules.Content {
+			r := &c.DatasetRules[i]
+			for _, entry := range []struct {
+				key    string
+				target *any
+			}{{"min", &r.Min}, {"max", &r.Max}, {"equals", &r.Equals}} {
+				if node := mappingValue(n, entry.key); node != nil {
+					v, err := exactValue(node, *entry.target)
+					if err != nil {
+						return fmt.Errorf("dataset rule %s %s: %w", r.Code, entry.key, err)
+					}
+					*entry.target = v
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func exactValue(n *yaml.Node, original any) (any, error) {
+	if n.Tag == "!!float" {
+		text := strings.ReplaceAll(n.Value, "_", "")
+		if _, ok := decimalNumber(text); !ok {
+			return nil, fmt.Errorf("numeric literal must be finite decimal with at most 1024 characters and exponent magnitude at most 1000 (line %d)", n.Line)
+		}
+		sign := ""
+		if strings.HasPrefix(text, "-") {
+			sign = "-"
+			text = text[1:]
+		} else if strings.HasPrefix(text, "+") {
+			text = text[1:]
+		}
+		exponent := ""
+		if at := strings.IndexAny(text, "eE"); at >= 0 {
+			exponent = text[at:]
+			text = text[:at]
+		}
+		whole, fraction, point := strings.Cut(text, ".")
+		whole = strings.TrimLeft(whole, "0")
+		if whole == "" {
+			whole = "0"
+		}
+		text = sign + whole
+		if point {
+			if fraction == "" {
+				fraction = "0"
+			}
+			text += "." + fraction
+		}
+		return json.Number(text + exponent), nil
+	}
+	switch v := original.(type) {
+	case map[string]any:
+		for i := 0; i < len(n.Content); i += 2 {
+			key := n.Content[i].Value
+			value, err := exactValue(n.Content[i+1], v[key])
+			if err != nil {
+				return nil, err
+			}
+			v[key] = value
+		}
+	case []any:
+		for i, child := range n.Content {
+			value, err := exactValue(child, v[i])
+			if err != nil {
+				return nil, err
+			}
+			v[i] = value
+		}
+	}
+	return original, nil
 }

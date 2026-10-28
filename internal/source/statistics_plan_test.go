@@ -30,7 +30,7 @@ func TestFailedStatisticsPlanLeavesNoPlanApplied(t *testing.T) {
 	record.Release()
 
 	budget := resource.New(128 << 20)
-	store, err := storage.New(context.Background(), config.S3{}, config.S3{}, budget)
+	store, err := storage.New(context.Background(), config.S3{}, config.S3{}, budget, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +40,7 @@ func TestFailedStatisticsPlanLeavesNoPlanApplied(t *testing.T) {
 		Source:    config.Source{URIs: []string{path}},
 		Execution: config.Execution{BatchTarget: "16KiB", MaxRecordBytes: "1MiB"},
 	}
-	ds, err := New(context.Background(), cfg, store, budget)
+	ds, err := New(context.Background(), cfg, store, budget, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}

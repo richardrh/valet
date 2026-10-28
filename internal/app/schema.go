@@ -42,7 +42,7 @@ func Schema(ctx context.Context, rt Runtime, cfg *config.Config) (report *source
 	}()
 	// Output settings are irrelevant: metadata inspection must never initialize
 	// output clients or publish a normal row-bucket/manifest result.
-	store, err = storage.New(ctx, cfg.Source.S3, config.S3{}, budget, storage.WithLogger(rt.logger()))
+	store, err = storage.New(ctx, cfg.Source.S3, config.S3{}, budget, rt.logger())
 	if err != nil {
 		return nil, fmt.Errorf("open schema storage: %w", err)
 	}

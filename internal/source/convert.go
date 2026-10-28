@@ -282,14 +282,50 @@ func appendCell(b array.Builder, c config.Column, v cell) error {
 		out.Append(arrow.Date64(day) * 86400000)
 	case *array.TimestampBuilder:
 		dt := out.Type().(*arrow.TimestampType)
-		if unit, native := parquetTimestampUnit(v.kind); native {
+		// Native Parquet timestamps carry their unit in the cell kind; rescale
+		// exactly between ticks per second.
+		var fromTicks int64
+		switch v.kind {
+		case kindTimestampSecond:
+			fromTicks = 1
+		case kindTimestampMillisecond:
+			fromTicks = 1000
+		case kindTimestampMicrosecond:
+			fromTicks = 1000000
+		case kindTimestampNanosecond:
+			fromTicks = 1000000000
+		}
+		if fromTicks != 0 {
 			raw, e := strconv.ParseInt(v.text, 10, 64)
 			if e != nil {
 				return errors.New("invalid native timestamp value")
 			}
-			converted, e := convertTimestampUnit(raw, unit, dt.Unit)
-			if e != nil {
-				return e
+			var toTicks int64
+			switch dt.Unit {
+			case arrow.Second:
+				toTicks = 1
+			case arrow.Millisecond:
+				toTicks = 1000
+			case arrow.Microsecond:
+				toTicks = 1000000
+			case arrow.Nanosecond:
+				toTicks = 1000000000
+			default:
+				return errors.New("unsupported timestamp unit")
+			}
+			converted := raw
+			if toTicks > fromTicks {
+				factor := toTicks / fromTicks
+				if raw > 0 && raw > math.MaxInt64/factor || raw < 0 && raw < math.MinInt64/factor {
+					return errors.New("timestamp outside target range")
+				}
+				converted = raw * factor
+			} else if fromTicks > toTicks {
+				factor := fromTicks / toTicks
+				if raw%factor != 0 {
+					return errors.New("timestamp conversion would lose precision")
+				}
+				converted = raw / factor
 			}
 			out.Append(arrow.Timestamp(converted))
 			break
@@ -309,57 +345,6 @@ func appendCell(b array.Builder, c config.Column, v cell) error {
 	return nil
 }
 
-func parquetTimestampUnit(kind cellKind) (arrow.TimeUnit, bool) {
-	switch kind {
-	case kindTimestampSecond:
-		return arrow.Second, true
-	case kindTimestampMillisecond:
-		return arrow.Millisecond, true
-	case kindTimestampMicrosecond:
-		return arrow.Microsecond, true
-	case kindTimestampNanosecond:
-		return arrow.Nanosecond, true
-	default:
-		return 0, false
-	}
-}
-
-func timestampTicks(unit arrow.TimeUnit) int64 {
-	switch unit {
-	case arrow.Second:
-		return 1
-	case arrow.Millisecond:
-		return 1000
-	case arrow.Microsecond:
-		return 1000000
-	case arrow.Nanosecond:
-		return 1000000000
-	default:
-		return 0
-	}
-}
-
-func convertTimestampUnit(value int64, from, to arrow.TimeUnit) (int64, error) {
-	fromTicks, toTicks := timestampTicks(from), timestampTicks(to)
-	if fromTicks == 0 || toTicks == 0 {
-		return 0, errors.New("unsupported timestamp unit")
-	}
-	if fromTicks == toTicks {
-		return value, nil
-	}
-	if toTicks > fromTicks {
-		factor := toTicks / fromTicks
-		if value > 0 && value > math.MaxInt64/factor || value < 0 && value < math.MinInt64/factor {
-			return 0, errors.New("timestamp outside target range")
-		}
-		return value * factor, nil
-	}
-	factor := fromTicks / toTicks
-	if value%factor != 0 {
-		return 0, errors.New("timestamp conversion would lose precision")
-	}
-	return value / factor, nil
-}
 func integerSyntax(s string, signed bool) bool {
 	if s == "" {
 		return false

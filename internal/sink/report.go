@@ -37,11 +37,6 @@ type lineEncoder struct {
 	enc *json.Encoder
 }
 
-func (e *lineEncoder) drop() {
-	e.buf = bytes.Buffer{}
-	e.enc = nil
-}
-
 // writeRecord encodes value as one NDJSON line. estimate bounds the encoded
 // record; it is reserved twice over for buffer growth copies.
 func (s *stream) writeRecord(value any, estimate int64) error {
@@ -62,7 +57,8 @@ func (s *stream) writeRecord(value any, estimate int64) error {
 		err = fmt.Errorf("encode report: %w", err)
 	}
 	if e.buf.Cap() > lineBufferRetain {
-		e.drop()
+		e.buf = bytes.Buffer{}
+		e.enc = nil
 	}
 	return err
 }
@@ -187,20 +183,6 @@ type rulesMetadata struct {
 	CSVStringEscape      string          `json:"csv_string_escape"`
 	CSVBinary            string          `json:"csv_binary_encoding"`
 	JSONIntegerPrecision string          `json:"json_integer_precision"`
-}
-
-func (w *Writer) rulesDocument() rulesMetadata {
-	doc := rulesMetadata{ReportVersion: data.ReportVersion, ConfigVersion: w.cfg.ConfigVersion, Name: w.cfg.Name, Version: w.cfg.Version, Rules: make([]ruleMetadata, 0, len(w.cfg.Rules)), DatasetRules: make([]ruleMetadata, 0, len(w.cfg.DatasetRules)), Fields: make([]fieldMetadata, 0, w.outputSchema.NumFields()), CSVNull: "\\N", CSVStringEscape: "double_backslash", CSVBinary: "base64", JSONIntegerPrecision: "64-bit integers are JSON numbers; use a lossless JSON decoder"}
-	for _, r := range w.cfg.Rules {
-		doc.Rules = append(doc.Rules, ruleMetadata{r.Code, r.Message, r.Level, r})
-	}
-	for _, r := range w.cfg.DatasetRules {
-		doc.DatasetRules = append(doc.DatasetRules, ruleMetadata{Code: r.Code, Severity: r.Level, Definition: r})
-	}
-	for _, f := range w.outputSchema.Fields() {
-		doc.Fields = append(doc.Fields, fieldMetadata{f.Name, f.Type.String(), f.Nullable})
-	}
-	return doc
 }
 
 // issueRecord is one issues/*.ndjson line. A schema/dataset issue does not

@@ -51,7 +51,7 @@ func inspectSchemaFixture(t *testing.T, cfg *config.Config) *SchemaReport {
 		t.Fatal(err)
 	}
 	budget := resource.New(cfg.BudgetBytes())
-	store, err := storage.New(context.Background(), cfg.Source.S3, config.S3{}, budget)
+	store, err := storage.New(context.Background(), cfg.Source.S3, config.S3{}, budget, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,12 +99,12 @@ func TestSchemaDoesNotDecodeCorruptedPayload(t *testing.T) {
 	// The same corruption must still fail normal row reading, not become an
 	// implicit bypass of the validation decoder's malformed-input guards.
 	budget := resource.New(cfg.BudgetBytes())
-	store, err := storage.New(context.Background(), config.S3{}, config.S3{}, budget)
+	store, err := storage.New(context.Background(), config.S3{}, config.S3{}, budget, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	ds, err := New(context.Background(), cfg, store, budget)
+	ds, err := New(context.Background(), cfg, store, budget, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,7 +317,7 @@ func TestOversizedSchemaReportFailsWithoutLeakingReservations(t *testing.T) {
 		t.Fatal(err)
 	}
 	budget := resource.New(8 << 10)
-	store, err := storage.New(context.Background(), config.S3{}, config.S3{}, budget)
+	store, err := storage.New(context.Background(), config.S3{}, config.S3{}, budget, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

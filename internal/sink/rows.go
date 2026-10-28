@@ -45,8 +45,6 @@ var partKindNames = [numPartKinds]string{"pass", "warn", "error", "issues", "rej
 func (k partKind) String() string  { return partKindNames[k] }
 func (k partKind) isRowKind() bool { return k < kindIssues }
 
-func kindFor(bucket data.Bucket) partKind { return partKind(bucket) }
-
 // formatFor is the file format, and extension, of parts of kind.
 func (w *Writer) formatFor(kind partKind) string {
 	if kind.isRowKind() {
@@ -242,29 +240,27 @@ func (w *Writer) closePart(kind partKind) error {
 	w.logger.Info("output part published", slog.String("phase", "output"), slog.String("kind", kind.String()), slog.Any("uri", storage.LogURI(ref.URI)), slog.Uint64("rows", ref.Count), slog.Int64("bytes", ref.Size))
 	return nil
 }
-func cellBytes(values arrow.Array, row int) int64 {
-	if values.IsNull(row) {
-		return 8
-	}
-	switch a := values.(type) {
-	case *array.String:
-		return int64(len(a.Value(row))) + 16
-	case *array.LargeString:
-		return int64(len(a.Value(row))) + 16
-	case *array.Binary:
-		return int64(len(a.Value(row))) + 16
-	case *array.LargeBinary:
-		return int64(len(a.Value(row))) + 16
-	case *array.FixedSizeBinary:
-		return int64(len(a.Value(row))) + 16
-	default:
-		return 64
-	}
-}
 func rowBytes(batch *data.Batch, row int) int64 {
 	n := int64(len(batch.Locations[row].Source) + 128)
 	for _, column := range batch.Record.Columns() {
-		n += cellBytes(column, row)
+		if column.IsNull(row) {
+			n += 8
+			continue
+		}
+		switch a := column.(type) {
+		case *array.String:
+			n += int64(len(a.Value(row))) + 16
+		case *array.LargeString:
+			n += int64(len(a.Value(row))) + 16
+		case *array.Binary:
+			n += int64(len(a.Value(row))) + 16
+		case *array.LargeBinary:
+			n += int64(len(a.Value(row))) + 16
+		case *array.FixedSizeBinary:
+			n += int64(len(a.Value(row))) + 16
+		default:
+			n += 64
+		}
 	}
 	return n
 }
@@ -304,7 +300,7 @@ func (w *Writer) writeRows(batch *data.Batch, result *data.Result) error {
 		if err := w.ctx.Err(); err != nil {
 			return err
 		}
-		kind := kindFor(bucket)
+		kind := partKind(bucket)
 		if !w.emit(kind) {
 			continue
 		}
@@ -317,7 +313,25 @@ func (w *Writer) writeRows(batch *data.Batch, result *data.Result) error {
 		if err != nil {
 			return err
 		}
-		if err = w.writeCSVRow(p, batch, row); err != nil {
+		charge := 2*rowBytes(batch, row) + int64(w.outputSchema.NumFields()*csvRowPerField) + csvRowBase
+		if err = w.budget.Reserve(charge, "CSV output row"); err != nil {
+			return err
+		}
+		record := p.record
+		for i, column := range batch.Record.Columns() {
+			record[i] = csvValue(column, row)
+		}
+		offset := int(batch.Record.NumCols())
+		location := batch.Locations[row]
+		record[offset] = escapeCSVString(location.Source)
+		record[offset+1] = strconv.FormatUint(location.SourceOrdinal, 10)
+		record[offset+2] = strconv.FormatUint(location.Row, 10)
+		record[offset+3] = strconv.FormatUint(location.GlobalRow, 10)
+		err = p.csv.Write(record)
+		// Drop cell references so the scratch row does not pin batch-derived strings.
+		clear(record)
+		w.budget.Release(charge)
+		if err != nil {
 			return err
 		}
 		if err = addCount(&p.stream.count, 1, "part rows"); err != nil {
@@ -338,27 +352,6 @@ func (w *Writer) writeRows(batch *data.Batch, result *data.Result) error {
 	}
 	return nil
 }
-func (w *Writer) writeCSVRow(p *part, batch *data.Batch, row int) error {
-	charge := 2*rowBytes(batch, row) + int64(w.outputSchema.NumFields()*csvRowPerField) + csvRowBase
-	if err := w.budget.Reserve(charge, "CSV output row"); err != nil {
-		return err
-	}
-	defer w.budget.Release(charge)
-	record := p.record
-	for i, column := range batch.Record.Columns() {
-		record[i] = csvValue(column, row)
-	}
-	offset := int(batch.Record.NumCols())
-	location := batch.Locations[row]
-	record[offset] = escapeCSVString(location.Source)
-	record[offset+1] = strconv.FormatUint(location.SourceOrdinal, 10)
-	record[offset+2] = strconv.FormatUint(location.Row, 10)
-	record[offset+3] = strconv.FormatUint(location.GlobalRow, 10)
-	err := p.csv.Write(record)
-	// Drop cell references so the scratch row does not pin batch-derived strings.
-	clear(record)
-	return err
-}
 func (w *Writer) writeParquet(batch *data.Batch, result *data.Result) error {
 	if w.mode() == "report" {
 		return nil
@@ -377,7 +370,7 @@ func (w *Writer) writeParquet(batch *data.Batch, result *data.Result) error {
 		}
 		var size int64
 		for row, bucket := range result.Buckets {
-			if kindFor(bucket) != kind {
+			if partKind(bucket) != kind {
 				continue
 			}
 			amount := rowBytes(batch, row)

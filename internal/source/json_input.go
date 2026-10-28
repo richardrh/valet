@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"strconv"
+	"strings"
 
 	"github.com/richardrh/valet/internal/diagnostics"
 	"github.com/richardrh/valet/internal/storage"
@@ -247,7 +248,7 @@ func (w *jsonWalker) extra(name string) error {
 	}
 	size := int64(0)
 	for _, segment := range append(w.path, name) {
-		size += 1 + int64(len(segment)) + int64(countEscapes(segment))
+		size += 1 + int64(len(segment)) + int64(strings.Count(segment, "~")+strings.Count(segment, "/"))
 	}
 	if w.policy.reserve != nil {
 		if err := w.policy.reserve(size*2 + 64); err != nil {
@@ -260,16 +261,6 @@ func (w *jsonWalker) extra(name string) error {
 	}
 	w.rec.extras = append(w.rec.extras, string(ptr.AppendToken(name)))
 	return nil
-}
-
-func countEscapes(s string) int {
-	n := 0
-	for i := range len(s) {
-		if s[i] == '~' || s[i] == '/' {
-			n++
-		}
-	}
-	return n
 }
 
 // jsonInput reads a JSON array or NDJSON object with one jsontext.Decoder.
@@ -311,16 +302,14 @@ func newJSONInput(d *Dataset, src *textStream) (*jsonInput, error) {
 	if j.array {
 		j.walker.depthBase = 1
 	}
-	j.walker.policy = jsonPolicy{ignoreExtras: d.ignoreExtras(), reserve: j.reserveRecord}
+	j.walker.policy = jsonPolicy{ignoreExtras: d.ignoreExtras(), reserve: func(n int64) error {
+		if err := d.budget.Reserve(n, "JSON projected paths"); err != nil {
+			return err
+		}
+		j.charge += n
+		return nil
+	}}
 	return j, nil
-}
-
-func (j *jsonInput) reserveRecord(n int64) error {
-	if err := j.d.budget.Reserve(n, "JSON projected paths"); err != nil {
-		return err
-	}
-	j.charge += n
-	return nil
 }
 
 func (j *jsonInput) names() []string {

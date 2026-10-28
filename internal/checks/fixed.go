@@ -60,16 +60,6 @@ func mulPow10(hi, lo uint64, k int32) (uint64, uint64, bool) {
 	return hi, lo, true
 }
 
-func cmp128(ah, al, bh, bl uint64) int {
-	switch {
-	case ah != bh:
-		return cmpUint(ah, bh)
-	case al != bl:
-		return cmpUint(al, bl)
-	}
-	return 0
-}
-
 // compareFixed orders two exact decimals. Aligning scales can overflow 128
 // bits only for the side whose magnitude then exceeds every 128-bit value, so
 // overflow itself decides the order.
@@ -96,7 +86,12 @@ func compareFixed(x, y fixed) ordering {
 		}
 	}
 	if c == 0 {
-		c = cmp128(xh, xl, yh, yl)
+		switch {
+		case xh != yh:
+			c = cmpUint(xh, yh)
+		case xl != yl:
+			c = cmpUint(xl, yl)
+		}
 	}
 	return orderOf(sx * c)
 }

@@ -18,18 +18,13 @@ func (p *parquetInput) advance(ctx context.Context) bool {
 	if !p.reader.Next(ctx) {
 		return false
 	}
-	if grouped, ok := p.reader.(interface{ Group() int }); ok {
-		group := grouped.Group()
-		if group != p.currentGroup {
-			p.currentGroup = group
-			coordinate := uint64(group)
-			p.groupCoordinate = &coordinate
-			p.groupRow = 0
-		}
+	if group := p.reader.Group(); group != p.currentGroup {
+		p.currentGroup = group
+		coordinate := uint64(group)
+		p.groupCoordinate = &coordinate
+		p.groupRow = 0
 	}
-	if events, ok := p.reader.(interface{ Evidence() *data.GroupEvidence }); ok {
-		p.evidence = events.Evidence()
-	}
+	p.evidence = p.reader.Evidence()
 	return true
 }
 

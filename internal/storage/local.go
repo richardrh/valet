@@ -142,17 +142,6 @@ type localReader struct {
 	err       error
 }
 
-func (s *Store) openLocal(ctx context.Context, obj Object) (*localReader, error) {
-	f, snap, err := s.pinnedFile(ctx, obj)
-	if err != nil {
-		return nil, err
-	}
-	if err = s.reserve(localReaderCharge, "local digest reader"); err != nil {
-		f.Close()
-		return nil, err
-	}
-	return &localReader{file: f, store: s, snap: snap, ctx: ctx, hash: sha256.New()}, nil
-}
 func (r *localReader) finish() error {
 	if r.finalized {
 		return r.err
@@ -181,7 +170,7 @@ func (r *localReader) Read(p []byte) (int, error) {
 	}
 	span := diagnostics.Start(r.ctx, diagnostics.InputHash)
 	n, err := r.file.Read(p)
-	recordBackendRead(r.ctx, n)
+	recordBackendRead(r.ctx, n, false)
 	r.read += int64(n)
 	_, _ = r.hash.Write(p[:n])
 	diagnostics.AddBytes(r.ctx, diagnostics.InputHash, uint64(n))
@@ -223,20 +212,21 @@ type localReaderAt struct {
 	snap         *snapshot
 	ctx          context.Context
 	verifyDigest bool
+	metadata     bool
 	closed       bool
 	err          error
 }
 
-func (s *Store) openLocalAt(ctx context.Context, obj Object, verifyDigest bool) (*localReaderAt, error) {
+func (s *Store) openLocalAt(ctx context.Context, obj Object, verifyDigest, metadata bool) (*localReaderAt, error) {
 	f, snap, err := s.pinnedFile(ctx, obj)
 	if err != nil {
 		return nil, err
 	}
-	if err = s.reserve(localReaderCharge, "local range reader"); err != nil {
+	if err = s.budget.Reserve(localReaderCharge, "local range reader"); err != nil {
 		f.Close()
 		return nil, err
 	}
-	return &localReaderAt{file: f, store: s, snap: snap, ctx: ctx, verifyDigest: verifyDigest}, nil
+	return &localReaderAt{file: f, store: s, snap: snap, ctx: ctx, verifyDigest: verifyDigest, metadata: metadata}, nil
 }
 func (r *localReaderAt) ReadAt(p []byte, offset int64) (int, error) {
 	r.mu.RLock()
@@ -250,7 +240,7 @@ func (r *localReaderAt) ReadAt(p []byte, offset int64) (int, error) {
 	// Identity is pinned at open and re-verified with a full digest at Close;
 	// per-call stats would double the syscalls of Parquet's many small reads.
 	n, err := r.file.ReadAt(p, offset)
-	recordBackendRead(r.ctx, n)
+	recordBackendRead(r.ctx, n, r.metadata)
 	return n, err
 }
 func (r *localReaderAt) digest() (err error) {
@@ -263,7 +253,7 @@ func (r *localReaderAt) digest() (err error) {
 		return err
 	}
 	const size = localDigestBuffer
-	if err := r.store.reserve(size, "local range replay digest"); err != nil {
+	if err := r.store.budget.Reserve(size, "local range replay digest"); err != nil {
 		return err
 	}
 	defer r.store.budget.Release(size)
@@ -279,9 +269,10 @@ func (r *localReaderAt) digest() (err error) {
 		}
 		n, err := r.file.ReadAt(buffer[:min(int64(len(buffer)), r.snap.object.Size-offset)], offset)
 		if n > 0 {
-			metadataBytes := int64(0)
+			var metadataBytes int64
 			if parquetMetadata {
-				metadataBytes = parquetMetadataBytes(offset, int64(n), footerOffset)
+				end := offset + int64(n)
+				metadataBytes = max(0, min(end, 4)-offset) + max(0, end-max(offset, footerOffset))
 			}
 			diagnostics.AddCounter(r.ctx, diagnostics.SourceMetadataBytesRead, uint64(metadataBytes))
 			diagnostics.AddCounter(r.ctx, diagnostics.SourcePayloadBytesRead, uint64(int64(n)-metadataBytes))
@@ -385,7 +376,7 @@ func (w *localWriter) Write(p []byte) (int, error) {
 	if w.buffer == nil && len(p) < localWriteBuffer {
 		// Buffering is optional: small budgets still support direct writes.
 		capacity := min(int64(localWriteBuffer), (w.store.budget.Limit()-w.store.budget.Used())/4)
-		if capacity >= 4096 && w.store.reserve(capacity, "local output buffer") == nil {
+		if capacity >= 4096 && w.store.budget.Reserve(capacity, "local output buffer") == nil {
 			w.buffer = make([]byte, 0, int(capacity))
 		}
 	}

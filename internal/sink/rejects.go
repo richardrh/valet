@@ -73,7 +73,39 @@ func (w *Writer) writeRejects(batch *data.Batch) error {
 		if row >= len(batch.Raw) || len(batch.Raw[row]) == 0 {
 			return fmt.Errorf("missing raw reject record at global row %d", location.GlobalRow)
 		}
-		if err := w.writeReject(batch, row, heads[location.GlobalRow], next, count); err != nil {
+		rowCharge := int64(batch.Record.NumCols())*rejectStateCharge + int64(count)*rejectDiagnosticCharge
+		if err := w.budget.Reserve(rowCharge, "reject field states"); err != nil {
+			return err
+		}
+		record := rejectRecord{ReportVersion: data.ReportVersion, RunID: w.runID, Location: location, Raw: batch.Raw[row], States: make([]rejectState, 0, int(batch.Record.NumCols())), Diagnostics: make([]data.Issue, 0, count)}
+		// Raw JSON is compacted and HTML-escaped by the encoder, so bound it like text.
+		estimate := textBytes(len(location.Source)+len(w.runID)+len(record.Raw)) + recordOverhead(8)
+		for column, field := range batch.Record.Schema().Fields() {
+			state := data.Valid
+			if states, ok := batch.States[field.Name]; ok {
+				if row >= len(states) {
+					w.budget.Release(rowCharge)
+					return fmt.Errorf("state count mismatch for reject column %s", field.Name)
+				}
+				state = states[row]
+			} else if batch.Record.Column(column).IsNull(row) {
+				state = data.Null
+			}
+			if _, err := state.MarshalText(); err != nil {
+				w.budget.Release(rowCharge)
+				return fmt.Errorf("reject column %s: %w", field.Name, err)
+			}
+			record.States = append(record.States, rejectState{Column: field.Name, State: state})
+			estimate += textBytes(len(field.Name)) + recordOverhead(2)
+		}
+		for pos := heads[location.GlobalRow]; pos != 0; pos = next[pos-1] {
+			issue := &batch.Ingest[pos-1]
+			record.Diagnostics = append(record.Diagnostics, *issue)
+			estimate += issueBytes(issue)
+		}
+		err := w.writeLine(kindRejects, record, estimate)
+		w.budget.Release(rowCharge)
+		if err != nil {
 			return err
 		}
 		if err := addCount(&w.rejectsEmitted, 1, "emitted raw rejects"); err != nil {
@@ -81,37 +113,4 @@ func (w *Writer) writeRejects(batch *data.Batch) error {
 		}
 	}
 	return nil
-}
-func (w *Writer) writeReject(batch *data.Batch, row, head int, next []int, count int) error {
-	charge := int64(batch.Record.NumCols())*rejectStateCharge + int64(count)*rejectDiagnosticCharge
-	if err := w.budget.Reserve(charge, "reject field states"); err != nil {
-		return err
-	}
-	defer w.budget.Release(charge)
-	location := batch.Locations[row]
-	record := rejectRecord{ReportVersion: data.ReportVersion, RunID: w.runID, Location: location, Raw: batch.Raw[row], States: make([]rejectState, 0, int(batch.Record.NumCols())), Diagnostics: make([]data.Issue, 0, count)}
-	// Raw JSON is compacted and HTML-escaped by the encoder, so bound it like text.
-	estimate := textBytes(len(location.Source)+len(w.runID)+len(record.Raw)) + recordOverhead(8)
-	for column, field := range batch.Record.Schema().Fields() {
-		state := data.Valid
-		if states, ok := batch.States[field.Name]; ok {
-			if row >= len(states) {
-				return fmt.Errorf("state count mismatch for reject column %s", field.Name)
-			}
-			state = states[row]
-		} else if batch.Record.Column(column).IsNull(row) {
-			state = data.Null
-		}
-		if _, err := state.MarshalText(); err != nil {
-			return fmt.Errorf("reject column %s: %w", field.Name, err)
-		}
-		record.States = append(record.States, rejectState{Column: field.Name, State: state})
-		estimate += textBytes(len(field.Name)) + recordOverhead(2)
-	}
-	for pos := head; pos != 0; pos = next[pos-1] {
-		issue := &batch.Ingest[pos-1]
-		record.Diagnostics = append(record.Diagnostics, *issue)
-		estimate += issueBytes(issue)
-	}
-	return w.writeLine(kindRejects, record, estimate)
 }

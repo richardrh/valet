@@ -85,53 +85,10 @@ func (w *s3Writer) reserveResponse() error {
 	}
 	// Keep one response workspace until finalization. It is reused by owner
 	// requests and guarantees abort capacity even after budget exhaustion.
-	if err := w.store.reserve(sdkResponseCharge, "S3 upload and cleanup response"); err != nil {
+	if err := w.store.budget.Reserve(sdkResponseCharge, "S3 upload and cleanup response"); err != nil {
 		return err
 	}
 	w.responseCharge = sdkResponseCharge
-	return nil
-}
-func (w *s3Writer) growBuffer() error {
-	if w.partSize == 0 {
-		available := w.store.budget.Limit() - w.store.budget.Used()
-		w.partSize = uploadPartSize
-		if available >= 256<<20 {
-			w.partSize = preferredUploadPartSize
-		} else if available >= 96<<20 {
-			w.partSize = preferredUploadPartSize / 2
-		}
-	}
-	capacity := min(w.partSize, max(64<<10, cap(w.buffer)*2))
-	if capacity >= w.partSize/2 {
-		capacity = w.partSize
-	}
-	if cap(w.buffer) == 0 && w.partSize == uploadPartSize {
-		available := w.store.budget.Limit() - w.store.budget.Used()
-		// A legal serial part can fit even when growing a small staging
-		// buffer into it cannot: both allocations must be charged during
-		// the copy. Choose the full legal buffer before accepting bytes.
-		if available >= uploadPartSize && available < 2*uploadPartSize {
-			capacity = uploadPartSize
-		}
-	}
-	// Geometry is only a preference until the first multipart request. If
-	// competing managed state grew since the first small Write, use a legal
-	// smaller part rather than requiring the originally preferred buffer.
-	if len(w.parts) == 0 && int64(capacity) > w.store.budget.Limit()-w.store.budget.Used() && capacity > uploadPartSize {
-		if cap(w.buffer) >= uploadPartSize {
-			w.partSize = cap(w.buffer)
-			return w.flush()
-		}
-		w.partSize, capacity = uploadPartSize, uploadPartSize
-	}
-	charge := int64(capacity)
-	if err := w.store.reserve(charge, "S3 upload buffer"); err != nil {
-		return err
-	}
-	next := make([]byte, len(w.buffer), capacity)
-	copy(next, w.buffer)
-	w.store.budget.Release(int64(cap(w.buffer)))
-	w.buffer = next
 	return nil
 }
 func (w *s3Writer) Write(p []byte) (int, error) {
@@ -161,15 +118,54 @@ func (w *s3Writer) Write(p []byte) (int, error) {
 		if err := w.ctx.Err(); err != nil {
 			return written, w.fail(err)
 		}
-		if len(w.buffer) == cap(w.buffer) {
-			var err error
-			if cap(w.buffer) == w.partSize && w.partSize != 0 {
-				err = w.flush()
-			} else {
-				err = w.growBuffer()
-			}
-			if err != nil {
+		if len(w.buffer) == cap(w.buffer) && cap(w.buffer) == w.partSize && w.partSize != 0 {
+			if err := w.flush(); err != nil {
 				return written, w.fail(err)
+			}
+		} else if len(w.buffer) == cap(w.buffer) {
+			// Grow the staging buffer toward the part size.
+			if w.partSize == 0 {
+				available := w.store.budget.Limit() - w.store.budget.Used()
+				w.partSize = uploadPartSize
+				if available >= 256<<20 {
+					w.partSize = preferredUploadPartSize
+				} else if available >= 96<<20 {
+					w.partSize = preferredUploadPartSize / 2
+				}
+			}
+			capacity := min(w.partSize, max(64<<10, cap(w.buffer)*2))
+			if capacity >= w.partSize/2 {
+				capacity = w.partSize
+			}
+			if cap(w.buffer) == 0 && w.partSize == uploadPartSize {
+				available := w.store.budget.Limit() - w.store.budget.Used()
+				// A legal serial part can fit even when growing a small staging
+				// buffer into it cannot: both allocations must be charged during
+				// the copy. Choose the full legal buffer before accepting bytes.
+				if available >= uploadPartSize && available < 2*uploadPartSize {
+					capacity = uploadPartSize
+				}
+			}
+			// Geometry is only a preference until the first multipart request. If
+			// competing managed state grew since the first small Write, use a legal
+			// smaller part rather than requiring the originally preferred buffer.
+			shrink := len(w.parts) == 0 && int64(capacity) > w.store.budget.Limit()-w.store.budget.Used() && capacity > uploadPartSize
+			if shrink && cap(w.buffer) >= uploadPartSize {
+				w.partSize = cap(w.buffer)
+				if err := w.flush(); err != nil {
+					return written, w.fail(err)
+				}
+			} else {
+				if shrink {
+					w.partSize, capacity = uploadPartSize, uploadPartSize
+				}
+				if err := w.store.budget.Reserve(int64(capacity), "S3 upload buffer"); err != nil {
+					return written, w.fail(err)
+				}
+				next := make([]byte, len(w.buffer), capacity)
+				copy(next, w.buffer)
+				w.store.budget.Release(int64(cap(w.buffer)))
+				w.buffer = next
 			}
 		}
 		n := min(len(p), cap(w.buffer)-len(w.buffer))
@@ -196,7 +192,7 @@ func (w *s3Writer) preparePart() (int, error) {
 	if len(w.parts) == cap(w.parts) {
 		capacity := min(10000, max(8, cap(w.parts)*2))
 		charge := int64(capacity) * completedPartCharge
-		if err := w.store.reserve(charge, "S3 completed part metadata"); err != nil {
+		if err := w.store.budget.Reserve(charge, "S3 completed part metadata"); err != nil {
 			return 0, err
 		}
 		parts := make([]types.CompletedPart, len(w.parts), capacity)
@@ -205,44 +201,13 @@ func (w *s3Writer) preparePart() (int, error) {
 		w.parts = parts
 		w.partsCharge = charge
 	}
-	if err := w.store.reserve(partETagCharge, "S3 part ETag"); err != nil {
+	if err := w.store.budget.Reserve(partETagCharge, "S3 part ETag"); err != nil {
 		return 0, err
 	}
 	w.etagCharge += partETagCharge
 	index := len(w.parts)
 	w.parts = append(w.parts, types.CompletedPart{PartNumber: aws.Int32(int32(index + 1))})
 	return index, nil
-}
-func (w *s3Writer) startUpload() error {
-	if w.uploadID != "" {
-		return nil
-	}
-	input := &s3.CreateMultipartUploadInput{
-		Bucket: aws.String(w.bucket), Key: aws.String(w.key),
-		Metadata: map[string]string{writeIDMetadataKey: w.writeID},
-	}
-	input.ServerSideEncryption, input.SSEKMSKeyId = w.store.outputSSE()
-	response, err := w.store.output.CreateMultipartUpload(w.ctx, input, func(options *s3.Options) {
-		options.Retryer = aws.NopRetryer{}
-	})
-	if err != nil {
-		cleanupErr := w.store.abortMultipartUploadsForKeyReserved(w.ctx, w.bucket, w.key)
-		return errors.Join(fmt.Errorf("create S3 multipart upload: %w", err), cleanupErr)
-	}
-	if response.UploadId == nil || *response.UploadId == "" {
-		cleanupErr := w.store.abortMultipartUploadsForKeyReserved(w.ctx, w.bucket, w.key)
-		return errors.Join(errors.New("S3 returned no multipart upload ID"), cleanupErr)
-	}
-	w.uploadID = *response.UploadId
-	if len(w.uploadID) > 16384 {
-		return errors.New("S3 upload ID exceeds bound")
-	}
-	if err := w.store.reserve(int64(len(w.uploadID)), "S3 upload identity"); err != nil {
-		return err
-	}
-	w.etagCharge += int64(len(w.uploadID))
-	w.uploadID = strings.Clone(w.uploadID)
-	return nil
 }
 func (w *s3Writer) upload(buffer []byte, index int) (string, error) {
 	response, err := w.store.output.UploadPart(w.ctx, &s3.UploadPartInput{
@@ -314,8 +279,32 @@ func (w *s3Writer) flush() error {
 	if err != nil {
 		return err
 	}
-	if err = w.startUpload(); err != nil {
-		return err
+	if w.uploadID == "" {
+		input := &s3.CreateMultipartUploadInput{
+			Bucket: aws.String(w.bucket), Key: aws.String(w.key),
+			Metadata: map[string]string{writeIDMetadataKey: w.writeID},
+		}
+		input.ServerSideEncryption, input.SSEKMSKeyId = w.store.outputSSE()
+		response, err := w.store.output.CreateMultipartUpload(w.ctx, input, func(options *s3.Options) {
+			options.Retryer = aws.NopRetryer{}
+		})
+		if err != nil {
+			cleanupErr := w.store.abortMultipartUploadsForKeyReserved(w.ctx, w.bucket, w.key)
+			return errors.Join(fmt.Errorf("create S3 multipart upload: %w", err), cleanupErr)
+		}
+		if response.UploadId == nil || *response.UploadId == "" {
+			cleanupErr := w.store.abortMultipartUploadsForKeyReserved(w.ctx, w.bucket, w.key)
+			return errors.Join(errors.New("S3 returned no multipart upload ID"), cleanupErr)
+		}
+		w.uploadID = *response.UploadId
+		if len(w.uploadID) > 16384 {
+			return errors.New("S3 upload ID exceeds bound")
+		}
+		if err := w.store.budget.Reserve(int64(len(w.uploadID)), "S3 upload identity"); err != nil {
+			return err
+		}
+		w.etagCharge += int64(len(w.uploadID))
+		w.uploadID = strings.Clone(w.uploadID)
 	}
 	// Reserve the next staging buffer, task, and response before starting a
 	// worker. Under low budgets reuse the owner's response slot synchronously.
@@ -323,7 +312,7 @@ func (w *s3Writer) flush() error {
 	if w.spare == nil {
 		charge += int64(w.partSize)
 	}
-	if w.pendingCount < len(w.pending) && w.store.reserve(charge, "S3 concurrent upload") == nil {
+	if w.pendingCount < len(w.pending) && w.store.budget.Reserve(charge, "S3 concurrent upload") == nil {
 		task := &uploadTask{done: make(chan struct{}), buffer: w.buffer, index: index}
 		if w.spare != nil {
 			w.buffer, w.spare = w.spare, nil
@@ -374,7 +363,11 @@ func (w *s3Writer) abortUpload() error {
 	defer cancel()
 	_, err := w.store.output.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{Bucket: aws.String(w.bucket), Key: aws.String(w.key), UploadId: aws.String(w.uploadID)})
 	w.uploadID = ""
-	w.store.logger.Warn("S3 multipart upload aborted", slog.Any("uri", LogURI(objectURI(w.bucket, w.key))), errAttr(err))
+	attrs := []any{slog.Any("uri", LogURI(objectURI(w.bucket, w.key)))}
+	if err != nil {
+		attrs = append(attrs, slog.String("error", err.Error()))
+	}
+	w.store.logger.Warn("S3 multipart upload aborted", attrs...)
 	if err != nil {
 		return fmt.Errorf("abort S3 multipart upload: %w", err)
 	}
@@ -417,7 +410,7 @@ func (w *s3Writer) Close() error {
 		w.releaseBuffer()
 		// SDK completion XML grows with part count; account encoding and growth copies.
 		xmlCharge := int64(completionXMLBase+len(w.parts)*completionXMLPerPart) + 8*w.etagCharge
-		if err := w.store.reserve(xmlCharge, "S3 completion XML"); err != nil {
+		if err := w.store.budget.Reserve(xmlCharge, "S3 completion XML"); err != nil {
 			return w.fail(err)
 		}
 		_, err := w.store.output.CompleteMultipartUpload(w.ctx, &s3.CompleteMultipartUploadInput{Bucket: aws.String(w.bucket), Key: aws.String(w.key), UploadId: aws.String(w.uploadID), IfNoneMatch: aws.String("*"), MultipartUpload: &types.CompletedMultipartUpload{Parts: w.parts}})
@@ -460,14 +453,6 @@ func (w *s3Writer) objectDigest() string {
 	return hex.EncodeToString(w.digest.Sum(sum[:0]))
 }
 
-func (s *Store) putS3Object(ctx context.Context, bucket, key string, body []byte, writeID, digest string) error {
-	if err := s.reserve(sdkResponseCharge, "S3 PUT response"); err != nil {
-		return err
-	}
-	defer s.budget.Release(sdkResponseCharge)
-	return s.putS3ObjectReserved(ctx, bucket, key, body, writeID, digest)
-}
-
 func (s *Store) putS3ObjectReserved(ctx context.Context, bucket, key string, body []byte, writeID, digest string) error {
 	input := &s3.PutObjectInput{
 		Bucket: aws.String(bucket), Key: aws.String(key), Body: bytes.NewReader(body),
@@ -491,11 +476,6 @@ func newS3WriteID() (string, error) {
 		return "", fmt.Errorf("generate S3 write identity: %w", err)
 	}
 	return hex.EncodeToString(raw[:]), nil
-}
-
-func s3BodyDigest(body []byte) string {
-	sum := sha256.Sum256(body)
-	return hex.EncodeToString(sum[:])
 }
 
 // reconcileS3ObjectReserved decides whether an ambiguous write published this

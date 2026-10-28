@@ -80,19 +80,17 @@ func (b *cappedBody) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// sdkLogger routes AWS SDK diagnostics to logger at debug level, so the SDK's
-// default standard logger never writes unstructured lines to stderr.
-func sdkLogger(logger *slog.Logger) logging.Logger {
-	return logging.LoggerFunc(func(classification logging.Classification, format string, v ...any) {
+func newS3(ctx context.Context, settings config.S3, logger *slog.Logger) (*s3.Client, error) {
+	// Request/response wire logging stays off (ClientLogMode 0): it would echo
+	// signed headers. Only the SDK's own Logf diagnostics reach the logger, at
+	// debug level, so the SDK's default standard logger never writes
+	// unstructured lines to stderr.
+	sdkLogger := logging.LoggerFunc(func(classification logging.Classification, format string, v ...any) {
 		if logger.Enabled(context.Background(), slog.LevelDebug) {
 			logger.Debug("aws sdk", slog.String("phase", "storage"), slog.String("classification", string(classification)))
 		}
 	})
-}
-func newS3(ctx context.Context, settings config.S3, logger *slog.Logger) (*s3.Client, error) {
-	// Request/response wire logging stays off (ClientLogMode 0): it would echo
-	// signed headers. Only the SDK's own Logf diagnostics reach the logger.
-	options := []func(*awsconfig.LoadOptions) error{awsconfig.WithRetryMaxAttempts(3), awsconfig.WithLogger(sdkLogger(logger)), awsconfig.WithClientLogMode(0)}
+	options := []func(*awsconfig.LoadOptions) error{awsconfig.WithRetryMaxAttempts(3), awsconfig.WithLogger(sdkLogger), awsconfig.WithClientLogMode(0)}
 	if settings.Region != "" {
 		options = append(options, awsconfig.WithRegion(settings.Region))
 	}
@@ -136,32 +134,6 @@ func newS3(ctx context.Context, settings config.S3, logger *slog.Logger) (*s3.Cl
 		}
 	}), nil
 }
-func (s *Store) statS3(ctx context.Context, uri string) (Object, error) {
-	bucket, key, err := s3URI(uri)
-	if err != nil {
-		return Object{}, err
-	}
-	if key == "" {
-		return Object{}, errors.New("S3 object key is empty")
-	}
-	if err = s.reserve(sdkResponseCharge, "S3 HEAD response"); err != nil {
-		return Object{}, err
-	}
-	defer s.budget.Release(sdkResponseCharge)
-	result, err := s.input.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(bucket), Key: aws.String(key)})
-	if err != nil {
-		return Object{}, fmt.Errorf("head S3 object: %w", err)
-	}
-	if result.ContentLength == nil || *result.ContentLength < 0 {
-		return Object{}, errors.New("S3 object has no valid content length")
-	}
-	canonical := (&url.URL{Scheme: "s3", Host: bucket, Path: "/" + key}).String()
-	obj := Object{URI: canonical, Size: *result.ContentLength, ETag: aws.ToString(result.ETag), VersionID: aws.ToString(result.VersionId), ModTime: aws.ToTime(result.LastModified)}
-	if err := validS3Identity(obj); err != nil {
-		return Object{}, err
-	}
-	return obj, nil
-}
 func validS3Identity(obj Object) error {
 	if obj.Size < 0 || ((obj.VersionID == "" || obj.VersionID == "null") && obj.ETag == "") {
 		return errors.New("S3 target lacks a version or ETag required for pinned reads")
@@ -179,7 +151,7 @@ func (s *Store) discoverS3(ctx context.Context, src config.Source, add func(stri
 			return err
 		}
 		const pageCharge = sdkResponseCharge
-		if err := s.reserve(pageCharge, "S3 discovery page"); err != nil {
+		if err := s.budget.Reserve(pageCharge, "S3 discovery page"); err != nil {
 			return err
 		}
 		input := &s3.ListObjectsV2Input{Bucket: aws.String(bucket), Prefix: aws.String(prefix), ContinuationToken: token, MaxKeys: aws.Int32(100)}
@@ -196,7 +168,7 @@ func (s *Store) discoverS3(ctx context.Context, src config.Source, add func(stri
 			if key == "" || strings.HasSuffix(key, "/") || !matchesFilter(key, src.Filter) {
 				continue
 			}
-			uri := (&url.URL{Scheme: "s3", Host: bucket, Path: "/" + key}).String()
+			uri := objectURI(bucket, key)
 			if e = add(uri); e != nil {
 				break
 			}
@@ -211,7 +183,7 @@ func (s *Store) discoverS3(ctx context.Context, src config.Source, add func(stri
 			e = errors.New("S3 listing continuation token exceeds bound")
 		}
 		if e == nil && more && token == nil {
-			e = s.reserve(s3ContinuationCharge, "S3 continuation token")
+			e = s.budget.Reserve(s3ContinuationCharge, "S3 continuation token")
 			if e == nil {
 				defer s.budget.Release(s3ContinuationCharge)
 			}
@@ -231,7 +203,8 @@ func (s *Store) discoverS3(ctx context.Context, src config.Source, add func(stri
 }
 
 // openS3 reads the pinned object; when ranged, only [offset, offset+length).
-func (s *Store) openS3(ctx context.Context, obj Object, ranged bool, offset, length int64) (io.ReadCloser, error) {
+// metadata attributes the bytes read to Parquet metadata rather than payload.
+func (s *Store) openS3(ctx context.Context, obj Object, ranged bool, offset, length int64, metadata bool) (io.ReadCloser, error) {
 	if err := validS3Identity(obj); err != nil {
 		return nil, err
 	}
@@ -251,7 +224,7 @@ func (s *Store) openS3(ctx context.Context, obj Object, ranged bool, offset, len
 		span = strconv.FormatInt(offset, 10) + "-" + strconv.FormatInt(offset+length-1, 10)
 		input.Range = aws.String("bytes=" + span)
 	}
-	if err = s.reserve(sdkResponseCharge, "S3 GET response"); err != nil {
+	if err = s.budget.Reserve(sdkResponseCharge, "S3 GET response"); err != nil {
 		return nil, err
 	}
 	defer s.budget.Release(sdkResponseCharge)
@@ -267,11 +240,11 @@ func (s *Store) openS3(ctx context.Context, obj Object, ranged bool, offset, len
 		result.Body.Close()
 		return nil, errors.New("S3 target did not honor the pinned byte range")
 	}
-	if err = s.reserve(s3BodyCharge, "S3 streaming reader"); err != nil {
+	if err = s.budget.Reserve(s3BodyCharge, "S3 streaming reader"); err != nil {
 		result.Body.Close()
 		return nil, err
 	}
-	return &s3Body{body: result.Body, remaining: length, store: s, ctx: ctx}, nil
+	return &s3Body{body: result.Body, remaining: length, store: s, ctx: ctx, metadata: metadata}, nil
 }
 
 type s3Body struct {
@@ -279,6 +252,7 @@ type s3Body struct {
 	remaining int64
 	store     *Store
 	ctx       context.Context
+	metadata  bool
 	closed    bool
 	err       error
 }
@@ -288,7 +262,7 @@ func (r *s3Body) Read(p []byte) (int, error) {
 		return 0, os.ErrClosed
 	}
 	n, err := r.body.Read(p)
-	recordBackendRead(r.ctx, n)
+	recordBackendRead(r.ctx, n, r.metadata)
 	r.remaining -= int64(n)
 	if r.remaining < 0 || (err == io.EOF && r.remaining != 0) {
 		r.err = io.ErrUnexpectedEOF
@@ -329,11 +303,12 @@ type s3ReaderAt struct {
 	window   s3RangeCache
 	tail     s3RangeCache
 	coalesce bool
+	metadata bool
 	closed   bool
 }
 
 func (r *s3ReaderAt) readRange(p []byte, offset int64) (int, error) {
-	body, err := r.store.openS3(r.ctx, r.obj, true, offset, int64(len(p)))
+	body, err := r.store.openS3(r.ctx, r.obj, true, offset, int64(len(p)), r.metadata)
 	if err != nil {
 		return 0, err
 	}
@@ -364,7 +339,7 @@ func (r *s3ReaderAt) cachedRead(p []byte, offset int64) (int, error) {
 		// Cache allocation is optional, and must not consume the workspace
 		// needed to validate the pinned GET response.
 		available := r.store.budget.Limit() - r.store.budget.Used()
-		if length > available-sdkResponseCharge-s3BodyCharge || r.store.reserve(length, "S3 range cache") != nil {
+		if length > available-sdkResponseCharge-s3BodyCharge || r.store.budget.Reserve(length, "S3 range cache") != nil {
 			return r.readRange(p, offset)
 		}
 		oldCharge := int64(cap(cache.data))

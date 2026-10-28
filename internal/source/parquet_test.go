@@ -49,7 +49,7 @@ func writeParquetFile(t *testing.T, record arrow.RecordBatch, codec compress.Com
 func openParquetDataset(t *testing.T, path string, input config.Input) *Dataset {
 	t.Helper()
 	budget := resource.New(128 << 20)
-	store, err := storage.New(context.Background(), config.S3{}, config.S3{}, budget)
+	store, err := storage.New(context.Background(), config.S3{}, config.S3{}, budget, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func openParquetDataset(t *testing.T, path string, input config.Input) *Dataset 
 		Source:    config.Source{URIs: []string{path}},
 		Execution: config.Execution{BatchTarget: "16KiB", MaxRecordBytes: "1MiB"},
 	}
-	ds, err := New(context.Background(), cfg, store, budget)
+	ds, err := New(context.Background(), cfg, store, budget, nil, false)
 	if err != nil {
 		_ = store.Close()
 		t.Fatal(err)
