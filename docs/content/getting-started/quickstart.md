@@ -6,9 +6,6 @@ prev: getting-started/installation
 next: guides/configuration
 ---
 
-The repository includes equivalent YAML and JSON pipelines plus a four-row CSV
-fixture.
-
 ## Inspect the input
 
 ```bash
@@ -23,7 +20,7 @@ REC002,South,500
 REC004,West,1500000
 ```
 
-The third data row has a missing `record_id`.
+Row 3 has no `record_id`.
 
 ## Plan the run
 
@@ -33,11 +30,7 @@ dist/valet plan \
   -i examples/sample.csv
 ```
 
-Use `examples/pipeline.json` to exercise the equivalent strict JSON pipeline.
-The plans are identical.
-
-The plan reports a CSV source, inferred `string`, `string`, `int64` columns,
-four rules and two required passes.
+Expect: CSV source, `string`, `string`, `int64` columns, four rules, two [passes](../../concepts/execution/#passes). `pipeline.json` gives the same plan.
 
 ## Validate
 
@@ -50,12 +43,7 @@ dist/valet validate \
 echo "exit=$?"
 ```
 
-Expected exit code: `1`. Validation completed successfully but found one
-error-level issue. The command returns one JSON summary on stdout. No output
-destination is configured, so Valet creates no files or manifest; the shell
-redirection saves the report as `demo-summary.json`.
-
-Selected report fields:
+Expect `exit=1` (one error-level issue). Stdout is the JSON [report](../../concepts/results/#report); without `-o` no files are written.
 
 ```json
 {
@@ -76,20 +64,9 @@ Selected report fields:
 jq '{validation, total, pass, warn, error, rule_counts}' demo-summary.json
 ```
 
-For a pipeline gate, check the exit code: `0` permits the next step, `1` blocks
-it because checks failed, and `2` means validation could not complete or its
-stdout report could not be delivered. Exit `0` allows warnings; use
-`level: error` for checks that must block ingestion. Keep the input immutable
-between validation and your separate lakehouse upload.
-Use the exit code from Valet itself, not the subsequent `jq` command. These
-sample commands are interactive; automated jobs should use the CI workflow.
-
-The report includes per-rule counts and coverage, not every row-level issue.
-See [CI automation](../../guides/ci/) for an exit-gated workflow.
+Gate on Valet's [exit code](../../concepts/results/#exit-codes), not `jq`'s; see [CI automation](../../guides/ci/).
 
 ## Optional: write Parquet and detailed issues
-
-Add an output destination when you want rewritten data and row-level diagnostics:
 
 ```bash
 dist/valet validate \
@@ -101,20 +78,16 @@ dist/valet validate \
 echo "exit=$?"
 ```
 
-This also exits `1`, but publishes Parquet pass/error buckets, detailed issues
-and a completion manifest. Stdout remains JSON. The default artifact mode is
-`all`; `--output-mode failures` omits passing rows, while `--output-mode report`
-keeps reports/issues but omits row files. Neither mode changes which checks run.
+Still `exit=1`; also writes Parquet pass/error buckets, issues and a [manifest](../../concepts/results/#manifest).
 
-Read the terminal manifest with `jq`:
+`--output-mode failures|report` trims row files; see [output modes](../../concepts/results/#output-modes).
 
 ```bash
 MANIFEST="$(jq -r '.manifest_uri' artifact-summary.json)"
 jq . "$MANIFEST"
 ```
 
-Follow the manifest's `artifacts` reference to `artifacts.ndjson`; the `issues`
-entry points to an NDJSON part containing:
+The issues NDJSON (listed in `artifacts.ndjson`) contains:
 
 ```json
 {
@@ -130,8 +103,7 @@ entry points to an NDJSON part containing:
 
 ## Try schema-only checks on Parquet
 
-The optional artifact run above writes one **pass** Parquet part for this
-sample. Select its path through the committed artifact index:
+Check the **pass** Parquet part from the run above:
 
 ```bash
 ARTIFACTS="$(jq -r '.artifacts.uri' "$MANIFEST")"
@@ -140,16 +112,7 @@ PARQUET="$(jq -r 'select(.kind == "pass" and .format == "parquet") | .uri' "$ART
 dist/valet schema -p examples/parquet-schema.yml -i "$PARQUET"
 ```
 
-Expected exit code: `0`. This checks **one generated file's schema**, not the
-original CSV or all files in the validation run.
-
-The example pipeline requires `record_id`, `location` and `amount` with types
-`string`, `string` and `int64`. It allows additional provenance columns. Its
-`AMOUNT_NONNEGATIVE` value rule is listed as **not evaluated**. During full
-validation, it selects these three user columns and writes fresh provenance
-rather than copying the old run's `__valet_*` fields.
-
-Selected fields from the JSON report:
+Expect exit `0`: one file's schema matches (`record_id`, `location`, `amount`); the `AMOUNT_NONNEGATIVE` value rule is **not evaluated**.
 
 ```json
 {
@@ -163,19 +126,10 @@ Selected fields from the JSON report:
 }
 ```
 
-`compatible: true` means the expected schema matched. It does not mean any row
-value was validated. No new bucket files or manifest are created.
-
-To check the values in that Parquet part as well:
+No row values are checked and nothing is written. To check values too (exit `0`, three passing rows):
 
 ```bash
 dist/valet validate -p examples/parquet-schema.yml -i "$PARQUET"
 ```
 
-Expected exit code: `0`, with three passing rows. See
-[schema-only Parquet checks](../../guides/schema/) for missing-column/type
-diagnostics, skipped checks, S3 and multi-file usage.
-
-
-Continue with the [rules cookbook](../../rules/) or the complete
-[runnable orders example](../../rules/#runnable-example).
+Next: [schema checks](../../guides/schema/), [rules cookbook](../../rules/), [runnable example](../../rules/#runnable-example).

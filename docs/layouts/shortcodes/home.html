@@ -2,12 +2,12 @@
   <section class="valet-hero">
     <div class="valet-hero__copy">
       <div class="valet-eyebrow">What is Valet?</div>
-      <h1>Validate files <span class="valet-gradient-text">before ingestion.</span></h1>
-      <p class="valet-lede">Valet is a command-line data quality gate for file-based pipelines. Check incoming files against your rules, then use its JSON report and exit code to decide whether ingestion proceeds.</p>
+      <h1>A validation gate for data files <span class="valet-gradient-text">before they reach your warehouse.</span></h1>
+      <p class="valet-lede">Check CSV, Parquet, JSON or NDJSON files against your rules; the exit code decides whether ingestion proceeds.</p>
       <div class="valet-actions">
-        <a class="valet-button valet-button--primary" href="{{ "getting-started/quickstart/" | relURL }}">Try the sample&nbsp; →</a>
+        <a class="valet-button valet-button--primary" href="{{ "getting-started/quickstart/" | relURL }}">Quickstart&nbsp; →</a>
+        <a class="valet-button" href="{{ "concepts/" | relURL }}">Concepts</a>
         <a class="valet-button" href="{{ "rules/" | relURL }}">Rules cookbook</a>
-        <a class="valet-button" href="{{ "guides/schema/" | relURL }}">Parquet schema checks</a>
       </div>
       <div class="valet-microcopy">
         <span>One CLI binary</span>
@@ -40,17 +40,26 @@
 
   <section class="valet-section">
     <div class="valet-section__header">
-      <div><span class="valet-kicker">Why Valet?</span><h2>Make data quality a pipeline step.</h2></div>
-      <p>A readable file can still have missing IDs, duplicate keys, invalid values or an unexpected schema. Check those requirements at the handoff, before your lakehouse, warehouse or downstream job has to deal with them.</p>
+      <div><span class="valet-kicker">Use cases</span><h2>Where Valet fits.</h2></div>
     </div>
-
     <div class="valet-feature-grid">
-      <article class="valet-feature"><span class="valet-feature__number">01</span><h3>Check more than the file format</h3><p>Validate required values, ranges, keys, references, column relationships and dataset totals against declared rules.</p></article>
-      <article class="valet-feature"><span class="valet-feature__number">02</span><h3>Keep rules with your pipeline</h3><p>Describe checks in YAML or JSON. Version and reuse the same configuration instead of maintaining a validation script for each input.</p></article>
-      <article class="valet-feature"><span class="valet-feature__number">03</span><h3>Give the caller a clear result</h3><p>Get an aggregate JSON report on stdout and use the exit code as your gate. No output files are created unless requested.</p></article>
-      <article class="valet-feature"><span class="valet-feature__number">04</span><h3>Investigate failures when needed</h3><p>Explicitly request row-level issues and Parquet or CSV outputs, with provenance connecting failures to their source rows.</p></article>
-      <article class="valet-feature"><span class="valet-feature__number">05</span><h3>Run without another service</h3><p>Use one self-contained CLI for local or S3-compatible files. Streaming execution shares a managed-memory budget.</p></article>
-      <article class="valet-feature"><span class="valet-feature__number">06</span><h3>Inspect a Parquet schema separately</h3><p>Only need column names and types? Use the metadata-only schema command; its report makes clear that values were not checked.</p></article>
+      <article class="valet-feature"><span class="valet-feature__number">01</span><h3>Loading files into staging</h3><p>Load only on exit 0. Rejects keep the original records.</p></article>
+      <article class="valet-feature"><span class="valet-feature__number">02</span><h3>Large uploads in a web service</h3><p>Managed memory stays within a set budget, whatever the upload size.</p></article>
+      <article class="valet-feature"><span class="valet-feature__number">03</span><h3>Pipeline and CI gates</h3><p>Airflow or CI blocks the next step on failed error-level checks.</p></article>
+    </div>
+  </section>
+
+  <section class="valet-section">
+    <div class="valet-section__header">
+      <div><span class="valet-kicker">Features</span><h2>What you get.</h2></div>
+    </div>
+    <div class="valet-feature-grid">
+      <article class="valet-feature"><span class="valet-feature__number">01</span><h3>More than format checks</h3><p>Required values, ranges, keys, references, column relationships, dataset totals.</p></article>
+      <article class="valet-feature"><span class="valet-feature__number">02</span><h3>Rules as config</h3><p>Versioned, reusable YAML or JSON; no per-input scripts.</p></article>
+      <article class="valet-feature"><span class="valet-feature__number">03</span><h3>Clear result</h3><p>Aggregate JSON on stdout plus exit code; no files unless requested.</p></article>
+      <article class="valet-feature"><span class="valet-feature__number">04</span><h3>Row-level detail on request</h3><p>Issues and Parquet/CSV outputs with provenance to source rows.</p></article>
+      <article class="valet-feature"><span class="valet-feature__number">05</span><h3>No extra service</h3><p>Self-contained CLI; streaming shares one managed-memory budget.</p></article>
+      <article class="valet-feature"><span class="valet-feature__number">06</span><h3>Parquet schema only</h3><p>Metadata-only command for names and types; values not checked.</p></article>
     </div>
   </section>
 
@@ -61,7 +70,7 @@
   </section>
 
   <section class="valet-cta">
-    <div><h2>Your pipeline still owns ingestion.</h2><p>Valet is not a lakehouse uploader, scheduler or storage platform. Keep your existing tools and put a validation gate before the next step. Use error-level rules for checks that must block ingestion; warnings alone do not block.</p></div>
+    <div><h2>Your pipeline still owns ingestion.</h2><p>Not an uploader, scheduler or storage platform; error-level rules block, warnings alone do not.</p></div>
     <a class="valet-button" href="{{ "getting-started/quickstart/" | relURL }}">Open the quickstart&nbsp; →</a>
   </section>
 </div>
