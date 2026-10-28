@@ -62,9 +62,7 @@ rules:
     column: amount
     level: error
     checks:
-      - type: valid_range
-        min: 0
-        exclusive_min: true
+      valid_range: {min: 0, exclusive_min: true}
 ```
 
 | Situation | Result |

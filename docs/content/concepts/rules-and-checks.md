@@ -13,7 +13,7 @@ A rule groups one or more checks under a stable code. Examples: [rules cookbook]
 | `code` | Stable, unique across `rules` and `dataset_rules`; `INGEST_*` is reserved |
 | `level` | `error` or `warn` |
 | `column` | Default column; a check's `column`/`columns` overrides it |
-| `checks` | List of checks; parameters sit beside `type` (no `params`) |
+| `checks` | Mapping of check name to arguments, e.g. `not_null: true`, `valid_values: [A, B]`; see [syntax](../../rules/) |
 | `when` | Optional condition |
 | `message`, `name` | Shown for failures; stored once in `rules.json` |
 

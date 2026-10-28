@@ -15,42 +15,56 @@ rules:
     column: default_column
     message: Explanation shown for failures
     checks:
-      - type: check_name
-        parameter: value        # inline beside type; no nested params field
+      not_null: true                       # no arguments: true
+      valid_values: [OPEN, PAID]           # one main argument: short form
+      valid_range: {min: 0, max: 10000}    # several arguments: a mapping
 ```
 
-- Check-level `column`/`columns` overrides the rule's `column`; the two are mutually exclusive. Unknown types and parameters are rejected.
+- Each key under `checks` is a check name; checks run in document order.
+- The value is one of:
+  - `true` (or empty, or `{}`) for a check without arguments;
+  - the check's main argument, for checks with a short form (see *Short form* below), e.g. `matches_pattern: '^[A-Z]+$'`;
+  - a mapping of arguments, e.g. `valid_range: {min: 0, exclusive_min: true}`.
+- `false` is rejected: remove the check instead.
+- Check-level `column`/`columns` overrides the rule's `column`; the two are mutually exclusive. Unknown checks and arguments are rejected.
+- A list is still accepted, and is needed only to use the same check twice in one rule:
+
+  ```yaml
+  checks:
+    - {type: matches_pattern, pattern: '^[A-Z]'}
+    - {type: matches_pattern, pattern: '[0-9]$'}
+  ```
 
 ## Check reference
 
-Scopes: see [Check scopes](../concepts/rules-and-checks/#check-scopes). `column*` = `column` or `columns` (or the rule's `column`).
+Scopes: see [Check scopes](../concepts/rules-and-checks/#check-scopes). `column*` = `column` or `columns` (or the rule's `column`). *Short form* is what a non-mapping value sets.
 
-| Check | Scope | Parameters | Null | Notes |
-|---|---|---|---|---|
-| `not_null` | row | `column*` | fails | null or missing fails |
-| `not_blank` | row | `column*` | fails | also empty / Unicode-whitespace-only strings |
-| `is_present` | row | `column*` | explicit null passes | only whether the JSON field/path exists |
-| `valid_length` | row | `column*`, `length` | fails | Unicode code points |
-| `min_length` | row | `column*`, `min_length` | fails | code points |
-| `max_length` | row | `column*`, `max_length` | fails | code points |
-| `valid_range` | row | `column*`, `min`, `max`, `exclusive_min`, `exclusive_max` | passes | inclusive by default; `exclusive_min` needs `min`, `exclusive_max` needs `max` |
-| `equals` | row | `column*`, `value` | fails | fails on mismatch |
-| `not_equals` | row | `column*`, `value` | passes | fails only on equality |
-| `all_equal` | row | `columns` (required), `value` | fails | every selected column equals `value` |
-| `has_null_keys` | row | `columns` (required) | fails | |
-| `valid_values` | row | `column*`, `values` | passes | allowed set |
-| `matches_pattern` | row | `column*`, `pattern` | fails | Go regexp; searches unless anchored |
-| `is_unique` | global | `column*` | fails | every duplicate occurrence fails, incl. the first |
-| `is_unique_composite` | global | `columns` (required) | fails | as above |
-| `compare_columns` | row | `column`, `other_column`, `operator` | fails | `==` `!=` `<` `<=` `>` `>=` |
-| `referential_integrity` | reference | `column`, `reference_file`, `reference_column` | distinct from empty | |
-| `referential_integrity_composite` | reference | `columns` (required), `reference_file`, `reference_columns` | distinct from empty | ordered column lists |
-| `required_columns` | schema | `columns` (required) | — | schema gate at `error`; extra columns allowed |
-| `schema_matches` | schema | `columns` (name → type map), `mode`, `require_columns`, `allow_extra_columns` | — | schema gate at `error` |
-| `valid_schema_columns` | schema | `reference_file`, `reference_column` | — | |
-| `type_check` | row | `column*`, `expected_type` | target-dependent | not run by `valet schema` |
-| `date_format` | row | `column*`, `format` or `formats` | passes | |
-| `timestamp_window` | row | `column*`, `min`, `max`, `timezone` | passes | inclusive bounds; offset-less wall times need IANA `timezone` |
+| Check | Scope | Parameters | Short form | Null | Notes |
+|---|---|---|---|---|---|
+| `not_null` | row | `column*` | `true` | fails | null or missing fails |
+| `not_blank` | row | `column*` | `true` | fails | also empty / Unicode-whitespace-only strings |
+| `is_present` | row | `column*` | `true` | explicit null passes | only whether the JSON field/path exists |
+| `valid_length` | row | `column*`, `length` | `length` | fails | Unicode code points |
+| `min_length` | row | `column*`, `min_length` | `min_length` | fails | code points |
+| `max_length` | row | `column*`, `max_length` | `max_length` | fails | code points |
+| `valid_range` | row | `column*`, `min`, `max`, `exclusive_min`, `exclusive_max` | — | passes | inclusive by default; `exclusive_min` needs `min`, `exclusive_max` needs `max` |
+| `equals` | row | `column*`, `value` | `value` | fails | fails on mismatch |
+| `not_equals` | row | `column*`, `value` | `value` | passes | fails only on equality |
+| `all_equal` | row | `columns` (required), `value` | — | fails | every selected column equals `value` |
+| `has_null_keys` | row | `columns` (required) | `columns` | fails | |
+| `valid_values` | row | `column*`, `values` | `values` | passes | allowed set |
+| `matches_pattern` | row | `column*`, `pattern` | `pattern` | fails | Go regexp; searches unless anchored |
+| `is_unique` | global | `column*` | `true` | fails | every duplicate occurrence fails, incl. the first |
+| `is_unique_composite` | global | `columns` (required) | `columns` | fails | as above |
+| `compare_columns` | row | `column`, `other_column`, `operator` | — | fails | `==` `!=` `<` `<=` `>` `>=` |
+| `referential_integrity` | reference | `column`, `reference_file`, `reference_column` | — | distinct from empty | |
+| `referential_integrity_composite` | reference | `columns` (required), `reference_file`, `reference_columns` | — | distinct from empty | ordered column lists |
+| `required_columns` | schema | `columns` (required) | `columns` | — | schema gate at `error`; extra columns allowed |
+| `schema_matches` | schema | `columns` (name → type map), `mode`, `require_columns`, `allow_extra_columns` | — | — | schema gate at `error` |
+| `valid_schema_columns` | schema | `reference_file`, `reference_column` | — | — | |
+| `type_check` | row | `column*`, `expected_type` | `expected_type` | target-dependent | not run by `valet schema` |
+| `date_format` | row | `column*`, `format` or `formats` | `format` | passes | |
+| `timestamp_window` | row | `column*`, `min`, `max`, `timezone` | — | passes | inclusive bounds; offset-less wall times need IANA `timezone` |
 
 - Invalid conversion makes a check unevaluable, not null. Uniqueness state counts against the [memory budget](../concepts/execution/#memory-budget).
 - Relative `reference_file` paths resolve from the pipeline file.
@@ -68,7 +82,7 @@ Scopes: see [Check scopes](../concepts/rules-and-checks/#check-scopes). `column*
   level: error
   column: closed_at
   when: {column: status, operator: eq, value: CLOSED}
-  checks: [{type: not_null}]
+  checks: {not_null: true}
 
 # composed
 when:
@@ -105,26 +119,30 @@ rules:
   - code: CUSTOMER_ID_REQUIRED
     level: error
     column: customer_id
-    checks: [{type: not_null}]
+    checks: {not_null: true}
   - code: QUANTITY_POSITIVE          # > 0; null passes, add not_null to forbid it
     level: error
     column: quantity
-    checks: [{type: valid_range, min: 0, exclusive_min: true}]
+    checks:
+      valid_range: {min: 0, exclusive_min: true}
   - code: SUBTOTAL_EXCEEDS_DISCOUNT  # rule-level column not needed
     level: error
-    checks: [{type: compare_columns, column: subtotal, other_column: discount, operator: ">"}]
+    checks:
+      compare_columns: {column: subtotal, other_column: discount, operator: ">"}
   - code: ORDER_LINE_UNIQUE
     level: error
-    checks: [{type: is_unique_composite, columns: [order_id, line_number]}]
+    checks:
+      is_unique_composite: [order_id, line_number]
   - code: CUSTOMER_EXISTS
     level: error
     column: customer_id
     checks:
-      - {type: referential_integrity, reference_file: references/customers.csv, reference_column: customer_id}
+      referential_integrity: {reference_file: references/customers.csv, reference_column: customer_id}
   - code: QUANTITY_IS_INTEGER        # row-level type check, e.g. with mode: raw_strings
     level: error
     column: quantity
-    checks: [{type: type_check, expected_type: int64}]
+    checks:
+      type_check: int64
 ```
 
 ### Columns and schema
@@ -133,7 +151,7 @@ rules:
   - code: EXACT_SCHEMA               # exact names and types, none missing or extra
     level: error
     checks:
-      - type: schema_matches
+      schema_matches:
         mode: strict
         require_columns: true
         allow_extra_columns: false
