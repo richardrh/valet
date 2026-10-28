@@ -18,5 +18,4 @@ rules:
     level: error
     column: amount
     checks:
-      - type: valid_range
-        min: 0
+      valid_range: {min: 0}

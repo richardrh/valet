@@ -190,6 +190,37 @@ func TestSchemaAcceptsWhatTheLoaderAccepts(t *testing.T) {
 	}
 }
 
+// The map form of checks must agree between the schema and the loader.
+func TestSchemaAgreesWithLoaderOnCheckMaps(t *testing.T) {
+	schema := compiledSchema(t)
+	doc := func(checks string) string {
+		return strings.Replace(schemaCase{}.document(), "checks: [{type: not_null}]", "checks: "+checks, 1)
+	}
+	for _, tc := range []struct {
+		checks string
+		valid  bool
+	}{
+		{"{not_null: true, valid_range: {min: 0, max: 10}}", true},
+		{"{not_null: null, is_unique: {}}", true},
+		{"{valid_values: [1, 2], matches_pattern: '^1', min_length: 1, equals: 3}", true},
+		{"{is_unique_composite: [id, s]}", true},
+		{"{not_nul: true}", false},
+		{"{not_null: false}", false},
+		{"{valid_range: 5}", false},
+		{"{valid_range: {mni: 1}}", false},
+		{"{valid_values: null}", false},
+	} {
+		t.Run(tc.checks, func(t *testing.T) {
+			d := doc(tc.checks)
+			loaderErr := loaderError(t, d)
+			schemaErr := schema.Validate(documentValue(t, d))
+			if (loaderErr == nil) != tc.valid || (schemaErr == nil) != tc.valid {
+				t.Errorf("valid=%t: loader error = %v; schema error = %v", tc.valid, loaderErr, schemaErr)
+			}
+		})
+	}
+}
+
 // Mistakes the loader rejects must also be flagged by the schema.
 func TestSchemaRejectsWhatTheLoaderRejects(t *testing.T) {
 	schema := compiledSchema(t)

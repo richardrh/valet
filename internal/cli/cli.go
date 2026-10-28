@@ -128,6 +128,7 @@ type options struct {
 	outputMode   string
 	parquetStats string
 	format       string
+	legacyStdout bool
 	recorder     *diagnostics.Recorder
 	set          map[string]bool
 }
@@ -271,72 +272,50 @@ func Run(ctx context.Context, rt app.Runtime, args []string) (code int) {
 	return ExitOK
 }
 
+// preparsePresentation picks the log settings before parsing, so even an
+// argument error is logged in the requested format. Invalid values are left
+// for parse to report.
 func preparsePresentation(args []string) *options {
 	opts := &options{logLevel: "info", logFormat: "text"}
 	for i := 1; i < len(args); i++ {
-		arg := args[i]
-		switch {
-		case arg == "-v" || arg == "--verbose":
+		name, value, inline := strings.Cut(strings.TrimLeft(args[i], "-"), "=")
+		if !strings.HasPrefix(args[i], "-") {
+			continue
+		}
+		if name == "v" || name == "verbose" {
 			opts.logLevel = "debug"
-		case strings.HasPrefix(arg, "--log-format="):
-			if value := strings.TrimPrefix(arg, "--log-format="); value == "text" || value == "json" {
-				opts.logFormat = value
+			continue
+		}
+		if name != "log-format" && name != "log-level" {
+			continue
+		}
+		if !inline {
+			if i+1 >= len(args) {
+				break
 			}
-		case arg == "--log-format" && i+1 < len(args):
 			i++
-			if args[i] == "text" || args[i] == "json" {
-				opts.logFormat = args[i]
-			}
-		case strings.HasPrefix(arg, "--log-level="):
-			if value := strings.TrimPrefix(arg, "--log-level="); logLevelKnown(value) {
-				opts.logLevel = value
-			}
-		case arg == "--log-level" && i+1 < len(args):
-			i++
-			if logLevelKnown(args[i]) {
-				opts.logLevel = args[i]
-			}
+			value = args[i]
+		}
+		switch {
+		case name == "log-format" && slices.Contains(logFormats, value):
+			opts.logFormat = value
+		case name == "log-level" && slices.Contains(logLevelNames, value):
+			opts.logLevel = value
 		}
 	}
 	return opts
 }
 
-// parse reads the command line and performs every check that does not need
-// the pipeline; semantic configuration rules belong to config.Validate.
+// parse reads the command line. Each command's flag set accepts only its own
+// flags and validates their values; config.Validate checks the pipeline.
 func parse(args []string) (*options, error) {
-	opts := &options{command: args[0], set: make(map[string]bool)}
-	if opts.command != "validate" && opts.command != "plan" && opts.command != "schema" {
+	opts := &options{command: args[0], logLevel: "info", logFormat: "text", format: "json", set: make(map[string]bool)}
+	flags, ok := newFlagSet(opts.command, opts)
+	if !ok {
 		return nil, fmt.Errorf("unknown command %q; use --help", opts.command)
 	}
-	var legacyStdout bool
-	flags := flag.NewFlagSet(opts.command, flag.ContinueOnError)
-	flags.SetOutput(io.Discard)
-	for _, name := range []string{"p", "pipeline"} {
-		flags.StringVar(&opts.pipeline, name, "", "")
-	}
-	for _, name := range []string{"i", "input"} {
-		flags.StringVar(&opts.input, name, "", "")
-	}
-	for _, name := range []string{"o", "output"} {
-		flags.StringVar(&opts.output, name, "", "")
-	}
-	for _, name := range []string{"v", "verbose"} {
-		flags.BoolVar(&opts.verbose, name, false, "")
-	}
-	flags.StringVar(&opts.memory, "memory-budget", "", "")
-	flags.StringVar(&opts.batch, "batch-target", "", "")
-	flags.IntVar(&opts.workers, "workers", 0, "")
-	flags.BoolVar(&opts.plain, "plain", false, "")
-	flags.BoolVar(&opts.stats, "stats", false, "")
-	flags.StringVar(&opts.jsonOutput, "json-output", "", "")
-	flags.StringVar(&opts.logLevel, "log-level", "info", "")
-	flags.StringVar(&opts.logFormat, "log-format", "text", "")
-	flags.StringVar(&opts.outputMode, "output-mode", "", "")
-	flags.StringVar(&opts.parquetStats, "parquet-stats", "", "")
-	flags.StringVar(&opts.format, "format", "json", "")
-	flags.BoolVar(&legacyStdout, "stdout", false, "")
 	if err := flags.Parse(args[1:]); err != nil {
-		return nil, err
+		return nil, flagError(opts.command, flags, err)
 	}
 	if flags.NArg() != 0 {
 		return nil, fmt.Errorf("unexpected positional argument %q", flags.Arg(0))
@@ -347,42 +326,8 @@ func parse(args []string) (*options, error) {
 		return nil, errors.New("legacy --stdout is unsupported: validate writes summary JSON to stdout by default; select --output to publish artifacts")
 	case strings.TrimSpace(opts.pipeline) == "":
 		return nil, errors.New("--pipeline (-p) is required")
-	case opts.command == "schema" && opts.has("output-mode", "parquet-stats"):
-		return nil, errors.New("schema does not accept data output or statistics-trust options")
-	case opts.command == "validate" && opts.has("format"):
-		return nil, errors.New("--format is a plan and schema option")
-	case opts.command == "schema" && opts.format != "json" && opts.format != "text":
-		return nil, errors.New("schema --format must be json or text")
-	case opts.command == "plan" && opts.format != "json" && opts.format != "pipeline":
-		return nil, errors.New("plan --format must be json or pipeline")
-	case opts.has("output-mode") && opts.outputMode != "all" && opts.outputMode != "failures" && opts.outputMode != "report":
-		return nil, errors.New("--output-mode must be all, failures or report")
-	case opts.has("parquet-stats") && opts.parquetStats != "off" && opts.parquetStats != "trusted":
-		return nil, errors.New("--parquet-stats must be off or trusted")
-	case opts.command != "validate" && opts.has("json-output"):
-		return nil, fmt.Errorf("%s already writes JSON to stdout; --json-output is a validate option", opts.command)
-	case opts.command == "schema" && opts.has("o", "output", "plain", "stats", "batch-target", "workers"):
-		return nil, errors.New("schema accepts input, memory-budget and logging options, not output or row-execution options")
-	case opts.has("json-output") && opts.jsonOutput == "":
-		return nil, errors.New("--json-output requires a nonempty path or '-'")
 	case opts.plain && opts.jsonOutput == "-":
 		return nil, errors.New("--plain conflicts with --json-output -")
-	case opts.has("i", "input") && strings.TrimSpace(opts.input) == "":
-		return nil, errors.New("--input requires a nonempty URI")
-	case opts.has("i", "input") && opts.input == "-":
-		return nil, errors.New("--input - (stdin) is unsupported: inputs must be replayable files or s3:// objects")
-	case opts.has("o", "output") && strings.TrimSpace(opts.output) == "":
-		return nil, errors.New("--output requires a nonempty URI")
-	case opts.has("o", "output") && opts.output == "-":
-		return nil, errors.New("--output - is unsupported: bucket outputs need a directory or s3:// prefix; use --json-output - for summary JSON")
-	case opts.has("memory-budget") && strings.TrimSpace(opts.memory) == "":
-		return nil, errors.New("--memory-budget requires a size")
-	case opts.has("batch-target") && strings.TrimSpace(opts.batch) == "":
-		return nil, errors.New("--batch-target requires a size")
-	case opts.logFormat != "text" && opts.logFormat != "json":
-		return nil, fmt.Errorf("--log-format must be text or json, not %q", opts.logFormat)
-	case !logLevelKnown(opts.logLevel):
-		return nil, fmt.Errorf("--log-level must be debug, info, warn or error, not %q", opts.logLevel)
 	case opts.verbose && opts.has("log-level") && opts.logLevel != "debug":
 		return nil, fmt.Errorf("--verbose selects debug logging and conflicts with --log-level %s", opts.logLevel)
 	}
@@ -418,11 +363,6 @@ func (o *options) apply(cfg *config.Config) {
 }
 
 var logLevels = map[string]slog.Level{"debug": slog.LevelDebug, "info": slog.LevelInfo, "warn": slog.LevelWarn, "error": slog.LevelError}
-
-func logLevelKnown(name string) bool {
-	_, ok := logLevels[name]
-	return ok
-}
 
 func newLogger(stderr io.Writer, opts *options) *slog.Logger {
 	return slog.New(diagnostics.NewHandler(stderr, opts.logFormat, logLevels[opts.logLevel], opts.recorder))

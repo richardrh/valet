@@ -21,9 +21,7 @@ rules:
     level: error
     column: amount
     checks:
-      - type: valid_range
-        min: 0
-        exclusive_min: true
+      valid_range: {min: 0, exclusive_min: true}
 
 # Explicit override for trusted producers:
 # valet validate -p examples/parquet-statistics.yml -i input.parquet \

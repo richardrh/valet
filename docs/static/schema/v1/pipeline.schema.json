@@ -697,6 +697,734 @@
       ],
       "type": "object"
     },
+    "check_map": {
+      "additionalProperties": false,
+      "properties": {
+        "all_equal": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "columns": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "value": {
+                  "$ref": "#/$defs/scalar"
+                }
+              },
+              "required": [
+                "columns"
+              ],
+              "type": "object"
+            },
+            {
+              "const": true
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A row-scope check: its arguments as a mapping, or true when it needs none."
+        },
+        "compare_columns": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "column": {
+                  "type": "string"
+                },
+                "operator": {
+                  "enum": [
+                    "==",
+                    "!=",
+                    "\u003c",
+                    "\u003c=",
+                    "\u003e",
+                    "\u003e="
+                  ],
+                  "type": "string"
+                },
+                "other_column": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            {
+              "const": true
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A row-scope check: its arguments as a mapping, or true when it needs none."
+        },
+        "date_format": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "column": {
+                  "type": "string"
+                },
+                "columns": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "format": {
+                  "type": "string"
+                },
+                "formats": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                }
+              },
+              "type": "object"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "A row-scope check: its arguments as a mapping, or just its format."
+        },
+        "equals": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "column": {
+                  "type": "string"
+                },
+                "columns": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "value": {
+                  "$ref": "#/$defs/scalar"
+                }
+              },
+              "type": "object"
+            },
+            {
+              "$ref": "#/$defs/scalar"
+            }
+          ],
+          "description": "A row-scope check: its arguments as a mapping, or just its value."
+        },
+        "has_null_keys": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "columns": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "columns"
+              ],
+              "type": "object"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            }
+          ],
+          "description": "A row-scope check: its arguments as a mapping, or just its columns."
+        },
+        "is_present": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "column": {
+                  "type": "string"
+                },
+                "columns": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                }
+              },
+              "type": "object"
+            },
+            {
+              "const": true
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A row-scope check: its arguments as a mapping, or true when it needs none."
+        },
+        "is_unique": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "column": {
+                  "type": "string"
+                },
+                "columns": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                }
+              },
+              "type": "object"
+            },
+            {
+              "const": true
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A global-scope check: its arguments as a mapping, or true when it needs none."
+        },
+        "is_unique_composite": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "columns": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "columns"
+              ],
+              "type": "object"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            }
+          ],
+          "description": "A global-scope check: its arguments as a mapping, or just its columns."
+        },
+        "matches_pattern": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "column": {
+                  "type": "string"
+                },
+                "columns": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "pattern": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "A row-scope check: its arguments as a mapping, or just its pattern."
+        },
+        "max_length": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "column": {
+                  "type": "string"
+                },
+                "columns": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "max_length": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "type": "object"
+            },
+            {
+              "minimum": 0,
+              "type": "integer"
+            }
+          ],
+          "description": "A row-scope check: its arguments as a mapping, or just its max_length."
+        },
+        "min_length": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "column": {
+                  "type": "string"
+                },
+                "columns": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "min_length": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "type": "object"
+            },
+            {
+              "minimum": 0,
+              "type": "integer"
+            }
+          ],
+          "description": "A row-scope check: its arguments as a mapping, or just its min_length."
+        },
+        "not_blank": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "column": {
+                  "type": "string"
+                },
+                "columns": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                }
+              },
+              "type": "object"
+            },
+            {
+              "const": true
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A row-scope check: its arguments as a mapping, or true when it needs none."
+        },
+        "not_equals": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "column": {
+                  "type": "string"
+                },
+                "columns": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "value": {
+                  "$ref": "#/$defs/scalar"
+                }
+              },
+              "type": "object"
+            },
+            {
+              "$ref": "#/$defs/scalar"
+            }
+          ],
+          "description": "A row-scope check: its arguments as a mapping, or just its value."
+        },
+        "not_null": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "column": {
+                  "type": "string"
+                },
+                "columns": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                }
+              },
+              "type": "object"
+            },
+            {
+              "const": true
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A row-scope check: its arguments as a mapping, or true when it needs none."
+        },
+        "referential_integrity": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "column": {
+                  "type": "string"
+                },
+                "reference_column": {
+                  "type": "string"
+                },
+                "reference_file": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            {
+              "const": true
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A reference-scope check: its arguments as a mapping, or true when it needs none."
+        },
+        "referential_integrity_composite": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "columns": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "reference_columns": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "reference_file": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "columns"
+              ],
+              "type": "object"
+            },
+            {
+              "const": true
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A reference-scope check: its arguments as a mapping, or true when it needs none."
+        },
+        "required_columns": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "columns": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "columns"
+              ],
+              "type": "object"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            }
+          ],
+          "description": "A schema-scope check: its arguments as a mapping, or just its columns."
+        },
+        "schema_matches": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "allow_extra_columns": {
+                  "type": "boolean"
+                },
+                "columns": {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/type_name"
+                  },
+                  "minProperties": 1,
+                  "type": "object"
+                },
+                "mode": {
+                  "enum": [
+                    "strict",
+                    "castable"
+                  ],
+                  "type": "string"
+                },
+                "require_columns": {
+                  "type": "boolean"
+                }
+              },
+              "type": "object"
+            },
+            {
+              "const": true
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A schema-scope check: its arguments as a mapping, or true when it needs none."
+        },
+        "timestamp_window": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "column": {
+                  "type": "string"
+                },
+                "columns": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "max": {
+                  "type": "string"
+                },
+                "min": {
+                  "type": "string"
+                },
+                "timezone": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            {
+              "const": true
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A row-scope check: its arguments as a mapping, or true when it needs none."
+        },
+        "type_check": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "column": {
+                  "type": "string"
+                },
+                "columns": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "expected_type": {
+                  "$ref": "#/$defs/type_name"
+                }
+              },
+              "type": "object"
+            },
+            {
+              "$ref": "#/$defs/type_name"
+            }
+          ],
+          "description": "A row-scope check: its arguments as a mapping, or just its expected_type."
+        },
+        "valid_length": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "column": {
+                  "type": "string"
+                },
+                "columns": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "length": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "type": "object"
+            },
+            {
+              "minimum": 0,
+              "type": "integer"
+            }
+          ],
+          "description": "A row-scope check: its arguments as a mapping, or just its length."
+        },
+        "valid_range": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "column": {
+                  "type": "string"
+                },
+                "columns": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "exclusive_max": {
+                  "type": "boolean"
+                },
+                "exclusive_min": {
+                  "type": "boolean"
+                },
+                "max": {
+                  "type": [
+                    "number",
+                    "string"
+                  ]
+                },
+                "min": {
+                  "type": [
+                    "number",
+                    "string"
+                  ]
+                }
+              },
+              "type": "object"
+            },
+            {
+              "const": true
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A row-scope check: its arguments as a mapping, or true when it needs none."
+        },
+        "valid_schema_columns": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "reference_column": {
+                  "type": "string"
+                },
+                "reference_file": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            {
+              "const": true
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A schema-scope check: its arguments as a mapping, or true when it needs none."
+        },
+        "valid_values": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "column": {
+                  "type": "string"
+                },
+                "columns": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "values": {
+                  "items": {
+                    "$ref": "#/$defs/scalar"
+                  },
+                  "type": "array"
+                }
+              },
+              "type": "object"
+            },
+            {
+              "items": {
+                "$ref": "#/$defs/scalar"
+              },
+              "type": "array"
+            }
+          ],
+          "description": "A row-scope check: its arguments as a mapping, or just its values."
+        }
+      },
+      "type": "object"
+    },
     "column": {
       "additionalProperties": false,
       "properties": {
@@ -1020,10 +1748,18 @@
       "additionalProperties": false,
       "properties": {
         "checks": {
-          "items": {
-            "$ref": "#/$defs/check"
-          },
-          "type": "array"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/check_map"
+            },
+            {
+              "items": {
+                "$ref": "#/$defs/check"
+              },
+              "type": "array"
+            }
+          ],
+          "description": "Checks, as a mapping keyed by check name or a list of {type: ...} entries."
         },
         "code": {
           "type": "string"

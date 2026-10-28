@@ -112,11 +112,14 @@ rules:
   - code: AMOUNT_RANGE
     level: error
     column: amount
-    checks: [{type: valid_range, min: 0, max: 10000}]
+    checks:
+      valid_range: {min: 0, max: 10000}
   - code: STATUS_KNOWN
     level: warn
     column: status
-    checks: [{type: valid_values, values: [OPEN, PAID, CANCELLED]}]
+    checks:
+      not_null: true
+      valid_values: [OPEN, PAID, CANCELLED]
 ```
 
 ```sh

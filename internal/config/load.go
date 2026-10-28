@@ -86,6 +86,9 @@ func Load(ctx context.Context, path string) (*Config, error) {
 	if err := validateNode(doc.Content[0], 0, &count); err != nil {
 		return nil, err
 	}
+	if err := normalizeCheckMaps(doc.Content[0]); err != nil {
+		return nil, err
+	}
 	if err := validateShape(doc.Content[0], reflect.TypeOf(Config{}), "config"); err != nil {
 		return nil, err
 	}

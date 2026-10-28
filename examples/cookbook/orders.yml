@@ -32,7 +32,7 @@ rules:
     name: Input contains exactly the documented order columns
     level: error
     checks:
-      - type: schema_matches
+      schema_matches:
         mode: strict
         require_columns: true
         allow_extra_columns: false
@@ -51,60 +51,52 @@ rules:
     level: error
     column: order_id
     checks:
-      - type: not_null
-      - type: not_blank
+      not_null: true
+      not_blank: true
 
   - code: CUSTOMER_ID_REQUIRED
     level: error
     column: customer_id
     checks:
-      - type: not_null
-      - type: not_blank
+      not_null: true
+      not_blank: true
 
   - code: QUANTITY_POSITIVE
     level: error
     column: quantity
     checks:
-      - type: valid_range
-        min: 0
-        exclusive_min: true
+      valid_range: {min: 0, exclusive_min: true}
 
   - code: UNIT_PRICE_POSITIVE
     level: error
     column: unit_price
     checks:
-      - type: valid_range
-        min: 0
-        exclusive_min: true
+      valid_range: {min: 0, exclusive_min: true}
 
   - code: STATUS_ALLOWED
     level: error
     column: status
     checks:
-      - type: valid_values
-        values: [OPEN, PAID, CANCELLED]
+      valid_values: [OPEN, PAID, CANCELLED]
 
   - code: ORDER_ID_UNIQUE
     level: error
     column: order_id
     checks:
-      - type: is_unique
+      is_unique: true
 
   - code: PAID_TOTAL_MATCHES_SUBTOTAL
     level: error
     when: {column: status, operator: eq, value: PAID}
     checks:
-      - type: compare_columns
-        column: paid_total
-        other_column: subtotal
-        operator: "=="
+      compare_columns: {column: paid_total, other_column: subtotal, operator: "=="}
 
   - code: PAID_ORDER_CLOSED_AT_REQUIRED
     level: error
     column: closed_at
     when: {column: status, operator: eq, value: PAID}
     checks:
-      - type: not_null
+      not_null: true
 
 dataset_rules:
   - code: DATASET_NOT_EMPTY
