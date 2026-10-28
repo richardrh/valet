@@ -6,45 +6,20 @@ prev: guides/output
 next: guides/performance
 ---
 
+Running Valet in pods and batch jobs: memory, storage, signals, logs.
+
 ## Kubernetes memory
 
-`execution.memory_budget` is a managed reservation limit, not a hard RSS cap.
-Leave headroom for the Go runtime, stacks, allocator retention, SDK state and
-filesystem/network buffers.
-
-CSV decoder reservations grow before reads according to admitted record bytes
-and bounded read-ahead, rather than reserving the maximum permitted record size
-up front. The high-water reservation remains while decoder buffers are retained.
-A large `max_record_bytes` ceiling therefore does not by itself imply an equally
-large allocation or resident-memory footprint.
+`execution.memory_budget` is a managed limit, not an RSS cap; leave headroom for the Go runtime, SDK and buffers ([memory budget](../../concepts/execution/#memory-budget)).
 
 > [!IMPORTANT]
-> The limits below are for **one decompressed row or record**, not for the
-> whole file. Valet streams input and has no configured whole-file size ceiling.
-> A 5 GB CSV with ordinary rows is expected to fit in the 1 GiB pod profile;
-> it takes longer, but it does not require 5 GB of memory.
-
-Recommended initial profiles:
+> Limits are per **decompressed row or record**, not per file. A 5 GB CSV with ordinary rows fits the 1 GiB profile (slower, not 5 GB of memory).
 
 | Pod limit | `GOMEMLIMIT` | Managed budget | Batch target | Max one CSV row | Max one JSON record | Max one Parquet row/page |
 |---:|---:|---:|---:|---:|---:|---:|
 | 512 MiB | 384 MiB | 256 MiB | 4 MiB | 512 KiB | 2 MiB | 4 MiB |
 | 1 GiB | 768 MiB | 512 MiB | 8 MiB | 1 MiB | 4 MiB | 8 MiB |
 | 2 GiB | 1.5 GiB | 1 GiB | 8–16 MiB | 2 MiB | 8 MiB | 8–16 MiB |
-
-Each active decoder reuses bounded working state. Batches and results have
-independent ownership; bounded queues may overlap reading, checking and writing.
-Their buffers, row-group workspaces and reorder state remain charged until the
-last consumer releases them. More workers share the same managed budget.
-Row-local execution remains bounded as total file size grows.
-
-Exact uniqueness and reference indexes are different: their state grows with
-distinct-key cardinality and can exhaust the managed budget even when every row
-is small. They fail explicitly rather than spilling or becoming approximate.
-
-These are conservative starting points. Measure representative RSS with your
-compression, schemas, output format, uniqueness cardinality and reference
-indexes before setting production requests and limits.
 
 ```yaml
 resources:
@@ -57,107 +32,87 @@ env:
     value: 768MiB
 ```
 
-Parquet producers should generally keep uncompressed row groups at or below 32
-MiB for the 1 GiB profile. A large row group can exhaust its guard even when
-individual rows are small.
+| What | Memory behaviour |
+|---|---|
+| `max_record_bytes` | A large ceiling does not by itself mean a large allocation; CSV reservations grow with actual record bytes. |
+| Workers | Share the same managed budget. |
+| Row-local checks | Stay bounded as file size grows. |
+| Exact uniqueness, reference indexes | Grow with distinct keys; can exhaust the budget and fail explicitly (no spilling or approximation). |
+| Parquet row groups | Keep uncompressed ≤ 32 MiB for the 1 GiB profile; large groups can exhaust the guard. |
 
-Benchmark the actual schema, rules, compression and output mode on the target
-storage. A small narrow fixture's compressed MB/s is not a general file-size
-runtime estimate. S3, gzip, wider rows, global checks and cold storage can change
-elapsed time without changing the bounded-memory property.
+- Profiles are starting points: measure RSS with your real compression, schemas, output, cardinality and storage before setting production limits.
+- Small-fixture MB/s does not predict runtime; see [Performance](../performance/).
+
+Internals (decoder buffers, queues, reorder state): [Engineering spec](https://github.com/richardrh/valet/blob/main/docs/engineering/spec.md).
 
 ## S3
 
-Valet uses the standard AWS SDK credential chain. Configure endpoint, region,
-path-style addressing and profile independently for source and output when
-needed. Do not put static credentials in pipeline documents.
+Uses the standard AWS SDK credential chain; never put static credentials in pipeline documents.
 
-S3 publication uses unique run prefixes and create-if-absent writes. Ambiguous
-PUT and multipart completion responses are reconciled by write identity, size
-and digest. Multipart creation is not retried transparently; ambiguous uploads
-are listed and aborted under pre-reserved cleanup capacity.
+| Topic | Behaviour |
+|---|---|
+| Settings | Endpoint, region, path-style addressing and profile, set separately for source and output. |
+| Publication | Unique run prefixes; writes never overwrite. |
+| Multipart | Ambiguous uploads are aborted; constrained budgets upload serially. |
+| Reads | Adjacent range reads are coalesced; schema-only inspection reads just the footer. |
+| Digests | Publication and artifact references share one completed digest. |
 
-Pinned range reads coalesce adjacent payload access under bounded caches;
-metadata-only schema inspection uses exact footer ranges. Multipart buffers grow
-lazily, select a legal part size under available memory, and admit a bounded
-number of concurrent uploads. Constrained budgets use serial uploads.
-Publication and artifact references share one authoritative completed digest.
-
-Configure an abort-incomplete-multipart lifecycle rule as defense in depth.
+Configure an abort-incomplete-multipart lifecycle rule as a backstop. Write reconciliation and part sizing: [Engineering spec](https://github.com/richardrh/valet/blob/main/docs/engineering/spec.md).
 
 ## Local publication
 
-Temporary files are synced, published without replacement and followed by a
-containing-directory sync. `manifest.json` is published and directory-synced
-last. A pre-commit directory-sync failure removes the newly published target
-before returning failure.
+Files are published without replacement and fsynced; `manifest.json` is written last and marks the commit ([Engineering spec](https://github.com/richardrh/valet/blob/main/docs/engineering/spec.md)).
 
 ## Metadata trust is not data integrity
 
-Schema-only inspection checks metadata, not payload contents. Parquet column
-statistics can be stale or false even when a footer is structurally valid.
-Object-version pinning, ETags and replay digests do not establish that the
-producer's original statistics matched its values.
-
-Valet reads values by default. Explicit `--parquet-stats trusted` can accept
-eligible producer claims with reduced payload coverage; its result and evidence
-ledger disclose that policy. See [statistics and tampering](../schema/#trust-and-tampering)
-and [output modes and metadata trust](../validation-modes/) before enabling it.
-
-An attacker who can replace both a file and its untrusted checksum can replace
-the apparent evidence too. Keep independently trusted digests, signatures and
-producer permissions outside the same unrestricted write boundary as the data.
+- Schema-only inspection checks metadata, not payload; Parquet statistics can be false in a valid footer.
+- Version pinning and ETags do not prove the statistics match the values.
+- Valet reads values by default. `--parquet-stats trusted` accepts eligible producer claims with reduced coverage, disclosed in the result and evidence ledger. Read [trust and tampering](../schema/#trust-and-tampering) and [output modes](../validation-modes/) first.
+- Keep trusted digests, signatures and producer permissions outside the data's write boundary; an attacker who can replace both file and checksum can fake the evidence.
 
 ## Signals and cancellation
 
-SIGINT and SIGTERM cancel the run, close readers/writers, abort known multipart
-uploads and avoid a terminal manifest. Conventional pre-commit exit codes are
-`130` and `143`.
+| Signal | Effect | Exit code |
+|---|---|---|
+| SIGINT | Cancel, close readers/writers, abort known multipart uploads, no terminal manifest | `130` |
+| SIGTERM | Same | `143` |
 
 ## Logging
 
-Logs go to stderr; stdout is reserved for requested presentation output.
+Logs go to stderr; stdout carries only requested output.
 
 ```bash
 valet validate ... --log-format json --log-level info
 valet validate ... --log-level debug
 ```
 
-Every run-scoped record includes `run_id`. URIs are redacted before logging;
-row values and credentials are not logged.
+| Item | Detail |
+|---|---|
+| All run records | `run_id`; URIs redacted; row values and credentials never logged. |
+| JSON records | `log_version`, `event`, run-local `seq`, command identity. |
+| `run.phase` | Work/queue-wait timings; phases overlap, so not additive CPU. |
+| `decode` phase | CSV/JSON/NDJSON parsing and batch conversion, once per batch. |
+| `run.finished` | Exit/commit outcome, byte counters, managed peak, coverage. |
+| `parquet.stats_decision` | Per row group, debug level; raw cells and min/max never logged. |
+| Logging failure | Does not abort validation; exit `3` still reports the committed manifest. |
 
-JSON diagnostics include `log_version`, `event`, run-local `seq` and command
-identity. `run.phase` records monotonic work/queue-wait measurements;
-`run.finished` reports the final exit/commit outcome, byte counters, managed peak
-and coverage. Concurrent phase work can overlap and is not additive CPU time.
-For CSV, JSON and NDJSON input, the `decode` phase covers parsing records and
-converting them into batches, measured once per batch.
-
-Per-group `parquet.stats_decision` events are debug-level; summaries and a
-producer-trust warning explain actual skips. Raw cells and raw min/max values
-are not logged. A logging failure alone does not abort validation; an exit-3
-stdout failure still reports the already committed manifest.
+Event schema: [validation modes spec](https://github.com/richardrh/valet/blob/main/docs/engineering/validation-modes-spec.md).
 
 ### Why a run failed
 
-With the default text log format, a failed run (exit `2`) ends with a plain
-error and, where Valet knows one, a hint, after the log records:
+With text logs, a failed run (exit `2`) ends with an error and, where known, a hint:
 
 ```text
 valet: error: malformed CSV in data/orders.csv at line 3: found 4 fields; the header has 3
 valet: hint: quote any field that contains ",", and check this line for a missing or extra ","; set input.on_malformed: reject to reject such rows and check the rest of the file
 ```
 
-With `--log-format json`, stderr stays JSON lines and the same information is
-in the `command failed` record. Its `error_class` is one of `input_format`,
-`resource`, `not_found`, `access_denied`, `canceled`, `deadline` or
-`operation`. Pipeline load and validation errors show their full message, for
-example `unknown field config.rules[0].chekcs (line 5)`. Other operational
-errors are described by class and typed fields only, because their text could
-contain row values or storage responses.
+With `--log-format json`, the same information is in the `command failed` record:
 
-Malformed input (`error_class: input_format`) is reported by file, position and
-a fixed reason, never by record contents:
+- `error_class`: `input_format`, `resource`, `not_found`, `access_denied`, `canceled`, `deadline` or `operation`.
+- Pipeline load/validation errors show the full message (e.g. `unknown field config.rules[0].chekcs (line 5)`); other errors show class and typed fields only, to avoid leaking row values.
+
+Malformed input (`error_class: input_format`) is reported by position and reason, never record contents:
 
 | Field | Meaning |
 |---|---|
@@ -169,16 +124,16 @@ a fixed reason, never by record contents:
 | `expected_fields`, `found_fields` | Header and record field counts, for `field_count` |
 | `hint` | How to fix the input |
 
-A malformed record stops the run by default. With `input.on_malformed: reject`,
-CSV rows with the wrong number of fields are rejected instead, as described in
-[input formats](../configuration/#malformed-csv-rows); every other malformed
-record still stops the run, because its boundaries or contents are not
-certain.
+Malformed records stop the run; `input.on_malformed: reject` rejects only wrong-field-count CSV rows ([malformed CSV rows](../configuration/#malformed-csv-rows)).
 
 ## Health checks for batch jobs
 
-Treat exits `0` and `1` as completed validation: `0` allows warnings and `1`
-means failed checks. Read stdout JSON for aggregate-only runs, or the manifest
-for explicit-output runs. Exit `2` includes operational/presentation failure
-without a committed manifest; signal exits indicate interruption. Exit `3`
-means an artifact manifest is already authoritative even though stdout failed.
+See [exit codes](../../concepts/results/#exit-codes) for definitions.
+
+| Exit | Treat as | Read |
+|---|---|---|
+| `0` | Completed, warnings allowed | stdout JSON or manifest |
+| `1` | Completed, checks failed | stdout JSON or manifest |
+| `2` | Failed, no committed manifest | stderr |
+| `3` | Manifest committed, stdout failed | manifest |
+| `130`, `143` | Interrupted by signal | — |

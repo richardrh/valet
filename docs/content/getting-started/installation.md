@@ -6,12 +6,11 @@ prev: getting-started
 next: getting-started/quickstart
 ---
 
+Go 1.27.3+ is needed only for Go builds; no cgo or native libraries.
+
 ## Download a release
 
-Download an archive and `checksums.txt` from
-[GitHub Releases](https://github.com/richardrh/valet/releases).
-Replace `<tag>` with the full version tag of a published release, for example
-`v0.1.0-rc.2`. Prereleases are not marked as the latest stable release.
+Get an archive and `checksums.txt` from [GitHub Releases](https://github.com/richardrh/valet/releases). `<tag>` is a full published tag, e.g. `v0.1.0-rc.2`; prereleases are not marked latest stable.
 
 | Platform | Archive |
 | --- | --- |
@@ -21,13 +20,11 @@ Replace `<tag>` with the full version tag of a published release, for example
 | macOS Intel | `valet_<tag>_darwin_amd64.tar.gz` |
 | macOS Apple Silicon | `valet_<tag>_darwin_arm64.tar.gz` |
 
-Every archive contains `valet` (`valet.exe` on Windows), `README.md`,
-`CHANGELOG.md`, `LICENSE` and `SECURITY.md`. Valet uses the MIT License; third-party
-dependencies retain their respective licenses.
+Archives contain `valet` (`valet.exe`), `README.md`, `CHANGELOG.md`, `LICENSE` (MIT; dependencies keep their licenses), `SECURITY.md`. Checksums catch corrupt downloads, not tampering; fetch both over HTTPS from this repo.
 
-### Linux
+### Linux and macOS
 
-For Linux amd64, in an empty download directory:
+In an empty directory (Linux amd64 shown):
 
 ```bash
 tag=v0.1.0 # Replace with a published tag.
@@ -42,23 +39,11 @@ install -m 0755 valet "$HOME/.local/bin/valet"
 "$HOME/.local/bin/valet" --version
 ```
 
-Stop if checksum verification fails. Add `$HOME/.local/bin` to `PATH` if it is
-not already present.
-
-### macOS
-
-Download the matching `darwin` archive and `checksums.txt`. Run
-`shasum -a 256 valet_<tag>_darwin_<arch>.tar.gz` and compare the complete digest
-with the matching filename in `checksums.txt` before extracting with `tar -xzf`.
-Install the extracted `valet` in a directory on your `PATH`.
-
-Darwin binaries are cross-built and their tests compile in CI, but they are
-not executed on macOS runners. They are not code-signed or notarized; local
-macOS security policy may require explicit approval.
+Stop if the checksum fails; add `$HOME/.local/bin` to `PATH`. On macOS use the `darwin_amd64`/`darwin_arm64` archive and replace `sha256sum` with `shasum -a 256 "$archive"`, comparing against `checksums.txt`. Darwin builds are unsigned, not notarized, and not run on macOS in CI; macOS may ask for approval.
 
 ### Windows
 
-In PowerShell, in an empty download directory:
+PowerShell, in an empty directory:
 
 ```powershell
 $tag = "v0.1.0" # Replace with a published tag.
@@ -78,81 +63,21 @@ Expand-Archive $archive -DestinationPath valet-release
 .\valet-release\valet.exe --version
 ```
 
-Move `valet.exe` to a directory on your `PATH`.
-
-Checksums detect corrupted or mismatched downloads; they are not a detached
-signature or an independent authenticity guarantee. Download both files from
-the intended repository's release over HTTPS.
+Move `valet.exe` onto your `PATH`.
 
 ## Install with Go
 
-With Go 1.27.3 or later, install without cloning the repository:
-
 ```bash
-go install github.com/richardrh/valet/cmd/valet@latest
+go install github.com/richardrh/valet/cmd/valet@latest   # or @v0.1.0-rc.2 to pin
 ```
 
-To pin a release, use its tag, for example
-`go install github.com/richardrh/valet/cmd/valet@v0.1.0-rc.2`.
-Go places the executable in `GOBIN`, or `$(go env GOPATH)/bin` when `GOBIN` is
-unset; add that directory to your `PATH`. This is a source build and currently
-reports `dev` with `--version`; downloaded release binaries are version-stamped.
+Installs to `GOBIN` (default `$(go env GOPATH)/bin`); add it to `PATH`. `--version` prints `dev`.
 
 ## Build from source
 
-- Go 1.27.3 or later is required, matching the repository's `go.mod`.
-- No Python, Polars, cgo, Arrow C++ or native compression library is required.
-
-
 ```bash
-git clone https://github.com/richardrh/valet.git
-cd valet
-mkdir -p dist
-CGO_ENABLED=0 go build -trimpath -o dist/valet ./cmd/valet
+git clone https://github.com/richardrh/valet.git && cd valet
+CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=v0.1.0" -o dist/valet ./cmd/valet
 ```
 
-To build a specific release, check out its published version tag before
-running `go build`. The default source build reports a development version;
-use the version-stamping command below when a version string is needed.
-
-Verify the binary:
-
-```bash
-dist/valet --version
-dist/valet --help
-```
-
-## Cross-build
-
-Linux arm64:
-
-```bash
-CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
-  go build -trimpath -o dist/valet-linux-arm64 ./cmd/valet
-```
-
-Windows amd64:
-
-```bash
-CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
-  go build -trimpath -o dist/valet.exe ./cmd/valet
-```
-
-## Reproducible version stamping
-
-Release builds can inject the version printed by `--version`:
-
-```bash
-CGO_ENABLED=0 go build \
-  -trimpath \
-  -ldflags="-s -w -X main.version=v0.1.0" \
-  -o dist/valet \
-  ./cmd/valet
-```
-
-The repository CI executes native Linux amd64/arm64 and Windows amd64 tests
-and release-binary CLI acceptance, plus Darwin cross-builds and test
-compilation. S3-compatible acceptance runs release and race-instrumented CLIs
-against independent MinIO and RustFS containers; it does not verify AWS IAM/KMS
-or actual AWS service behavior. See the [CI guide](../../guides/ci/) for release
-publishing and the one-time GitHub setup.
+Check out a tag first for a specific release; omit `-ldflags` for a development version. Cross-build with `GOOS`/`GOARCH` (e.g. `GOOS=windows GOARCH=amd64`, `-o dist/valet.exe`). Platform test coverage: [CI guide](../../guides/ci/).

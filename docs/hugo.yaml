@@ -37,24 +37,27 @@ menu:
     - name: Documentation
       pageRef: /getting-started
       weight: 1
+    - name: Concepts
+      pageRef: /concepts
+      weight: 2
     - name: Guides
       pageRef: /guides
-      weight: 2
+      weight: 3
     - name: Rules
       pageRef: /rules
-      weight: 3
-    - name: Search
       weight: 4
+    - name: Search
+      weight: 5
       params:
         type: search
     - name: GitHub
       url: https://github.com/richardrh/valet
-      weight: 5
+      weight: 6
       params:
         icon: github
 
 params:
-  description: A command-line data quality gate for local and S3-compatible files before ingestion.
+  description: A validation gate for data files before they reach your warehouse.
   navbar:
     displayTitle: true
     displayLogo: true

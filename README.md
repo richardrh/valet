@@ -21,7 +21,7 @@ flowchart LR
 | Inputs | CSV, Parquet, JSON, NDJSON — local files or S3-compatible storage |
 | Checks | Schema, nulls, ranges, allowed values, patterns, uniqueness, references, column comparisons, dataset metrics |
 | Outputs | JSON report and exit code; optional pass/warn/error rows, issues, rejects and a manifest |
-| Memory | Fixed managed budget (default 512 MiB), independent of file size |
+| Memory | Managed memory stays within a budget (default 512 MiB), whatever the file size |
 | Exactness | Integers and decimals compared exactly, never through floats |
 | Runtime | One executable — no Python, no service |
 
