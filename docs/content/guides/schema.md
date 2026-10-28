@@ -31,7 +31,7 @@ rules:
   - code: EXPECTED_SCHEMA
     level: error
     checks:
-      - type: schema_matches
+      schema_matches:
         mode: strict
         columns:
           record_id: string
@@ -55,8 +55,7 @@ rules:
   - code: COLUMNS_PRESENT
     level: error
     checks:
-      - type: required_columns
-        columns: [record_id, location, amount]
+      required_columns: [record_id, location, amount]
 ```
 
 `input.schema.columns` also works: types, decimal/timestamp parameters, `required: true` and `extra_fields: error` are compared after renames. The bundled pipeline uses `extra_fields: ignore` so `__valet_*` provenance columns pass.

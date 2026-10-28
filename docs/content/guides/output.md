@@ -9,7 +9,7 @@ next: guides/operations
 
 What `valet validate` writes. Terms: [report](../../concepts/results/#report), [manifest](../../concepts/results/#manifest); modes: [output modes](../validation-modes/).
 
-| Stdout flag | Effect |
+| Stdout flag (`validate` only; see [CLI reference](../../reference/cli/)) | Effect |
 |---|---|
 | (default) | JSON summary |
 | `--plain` | `key=value` |
