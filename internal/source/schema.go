@@ -458,6 +458,7 @@ func inspectSchemaObject(ctx context.Context, d *Dataset, report *SchemaReport, 
 }
 
 func schemaType(typ arrow.DataType) string {
+	typ = parquetLogicalType(typ)
 	if name, ok := config.CanonicalType(typ.Name()); ok {
 		return name
 	}

@@ -28,6 +28,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Error messages that mention a URI scheme without credentials, such as
   `s3:// objects`, are no longer rewritten to `s3: objects`.
+- Parquet files whose stored Arrow schema uses dictionary-encoded columns
+  (pandas categoricals, pyarrow `dictionary_encode`) or `large_string` /
+  `large_binary` columns are validated as their value types (`string`,
+  `binary`) instead of stopping with `operation failed`. A dictionary file and
+  a plain `string` file in one source are compatible.
 
 ## [0.1.0-rc.2] - 2026-10-26
 

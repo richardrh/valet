@@ -382,7 +382,7 @@ func (d *Dataset) inspectParquet(ctx context.Context, obj storage.Object) (err e
 			if err != nil {
 				return err
 			}
-			if err = d.addColumn(d.rename(name), c, af.Type); err != nil {
+			if err = d.addColumn(d.rename(name), c, parquetLogicalType(af.Type)); err != nil {
 				return err
 			}
 		}
