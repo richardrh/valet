@@ -195,6 +195,8 @@ func (p *parquetInput) validatePages(ctx context.Context) error {
 	headerLimit := min(pageLimit, int64(maxPageHeaderBytes))
 	pageStates, dictStates := p.pageStates, p.dictStates
 	rg := p.file.MetaData().RowGroup(p.guardGroup)
+	// leaves are ascending, so next tracks the following decoded leaf.
+	next := 0
 	for column := range rg.NumColumns() {
 		chunk, e := rg.ColumnChunk(column)
 		if e != nil {
@@ -204,6 +206,13 @@ func (p *parquetInput) validatePages(ctx context.Context) error {
 		normalizedStart := int64(len(p.verified))
 		normalized.DataPageOffset = normalizedStart
 		normalized.DictionaryPageOffset = nil
+		if next >= len(p.leaves) || p.leaves[next] != column {
+			// Skipped nested leaves are never decoded; they keep no bytes
+			// in the verified stream.
+			normalized.TotalCompressedSize, normalized.TotalUncompressedSize = 0, 0
+			continue
+		}
+		next++
 		descriptor := p.file.MetaData().Schema.Column(column)
 		// validateParquetStructure has already checked this chunk's type,
 		// levels, codec, location, and counts against the payload bounds.

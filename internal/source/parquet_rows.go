@@ -125,7 +125,7 @@ func newOrderedParquetRecords(ctx context.Context, input *parquetInput) (*ordere
 			return nil, errors.New("invalid or overflowing Parquet row-group row count")
 		}
 		totalRows += rows
-		if rg.NumColumns() != len(input.header) {
+		if rg.NumColumns() != input.file.MetaData().Schema.NumColumns() {
 			return nil, errors.New("row-group column count differs from schema")
 		}
 		n, compressed := rg.TotalByteSize(), rg.TotalCompressedSize()
@@ -133,7 +133,7 @@ func newOrderedParquetRecords(ctx context.Context, input *parquetInput) (*ordere
 			return nil, errors.New("invalid Parquet row-group size")
 		}
 		maximum = max(maximum, n*4+compressed)
-		for column := range rg.NumColumns() {
+		for _, column := range input.leaves {
 			chunk, err := rg.ColumnChunk(column)
 			if err != nil {
 				return nil, err
@@ -207,7 +207,7 @@ type parquetRowGroupWorker struct {
 func (r *orderedParquetRecords) runWorker(ctx context.Context, original *parquetInput, worker int) {
 	defer r.wait.Done()
 	defer close(r.inputs[worker])
-	p := &parquetInput{d: original.d, handle: original.handle, file: original.file, schema: original.schema, header: original.header}
+	p := &parquetInput{d: original.d, handle: original.handle, file: original.file, schema: original.schema, header: original.header, leaves: original.leaves}
 	state := &parquetRowGroupWorker{input: p}
 	defer func() {
 		cleanup := &parquetInput{d: p.d, file: state.file}
@@ -240,13 +240,13 @@ func (r *orderedParquetRecords) runWorker(ctx context.Context, original *parquet
 			}
 		}
 		if !prepared {
-			if err := p.reserve(int64(len(p.header))*1024+metadataFixedBytes, "Parquet row-group worker state"); err != nil {
+			if err := p.reserve(int64(p.file.MetaData().Schema.NumColumns())*1024+metadataFixedBytes, "Parquet row-group worker state"); err != nil {
 				r.failures[worker] = parquetWorkerFailure{group: group, err: err}
 				r.send(ctx, worker, parquetRecordResult{end: true, err: err})
 				return
 			}
-			p.pageStates = make([]int64, len(p.header))
-			p.dictStates = make([]int64, len(p.header))
+			p.pageStates = make([]int64, p.file.MetaData().Schema.NumColumns())
+			p.dictStates = make([]int64, p.file.MetaData().Schema.NumColumns())
 			prepared = true
 		}
 		err := r.readGroup(ctx, state, group, worker)
@@ -305,7 +305,7 @@ func (r *orderedParquetRecords) readGroup(ctx context.Context, state *parquetRow
 	} else {
 		*state.metadata = *p.bridge
 	}
-	reader, err := state.arrow.GetRecordReader(ctx, nil, []int{0})
+	reader, err := state.arrow.GetRecordReader(ctx, p.leaves, []int{0})
 	if err != nil {
 		return err
 	}

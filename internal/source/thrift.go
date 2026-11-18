@@ -31,15 +31,23 @@ const (
 	schemaFieldCount       = 11 // one past the highest SchemaElement field ID tracked for duplicates
 )
 
-// Parquet repetition enum values accepted for flat leaves.
+// Parquet repetition enum values. Top-level leaves must be required or
+// optional; repeated elements are legal only inside a group field, which is
+// skipped as an unsupported column rather than decoded.
 const (
 	repetitionRequired = 0
 	repetitionOptional = 1
+	repetitionRepeated = 2
 )
+
+// maxSchemaDepth bounds group nesting below the root.
+const maxSchemaDepth = 64
 
 // LogicalType union member IDs from parquet.thrift.
 const (
 	logicalString    = 1
+	logicalMap       = 2
+	logicalList      = 3
 	logicalEnum      = 4
 	logicalDecimal   = 5
 	logicalDate      = 6
@@ -84,7 +92,9 @@ func validateCompact(raw []byte) error {
 	if c.trans.remaining() != 0 {
 		return errors.New("trailing Parquet metadata bytes")
 	}
-	// A second walk checks the flat schema shape the readers support.
+	// A second walk checks the depth-first schema tree. Every leaf keeps the
+	// physical-type, width and annotation checks; group fields are accepted so
+	// the reader can skip them, and every group's child count must be satisfied.
 	c = newRawCompactReader(raw)
 	seenSchema := false
 	return c.fields(func(id int, kind thrift.TType) error {
@@ -106,9 +116,11 @@ func validateCompact(raw []byte) error {
 			return errors.New("invalid Parquet schema element count")
 		}
 		count := uint64(n)
+		// remaining[d] counts the children still owed to the open group at depth d.
+		remaining := make([]int64, 0, 8)
 		for i := range count {
 			physical, children, repetition, width := int64(-1), int64(0), int64(-1), int64(0)
-			hasType := false
+			hasType, hasChildren, groupAnnotation := false, false, false
 			seen := [schemaFieldCount]bool{}
 			e = c.fields(func(field int, k thrift.TType) error {
 				if field < len(seen) {
@@ -127,9 +139,10 @@ func validateCompact(raw []byte) error {
 				case schemaRepetitionField:
 					repetition, e = c.integer(k)
 				case schemaNumChildrenField:
+					hasChildren = true
 					children, e = c.integer(k)
 				case schemaLogicalTypeField:
-					e = c.logicalType(k)
+					groupAnnotation, e = c.logicalType(k)
 				default:
 					e = c.skip(k, 2)
 				}
@@ -142,23 +155,50 @@ func validateCompact(raw []byte) error {
 				return errors.New("Parquet schema child count exceeds remaining elements")
 			}
 			if i == 0 {
-				if hasType || uint64(children) != count-1 {
+				if hasType {
 					return errors.New("invalid Parquet root child count")
+				}
+				if children > 0 {
+					remaining = append(remaining, children)
 				}
 				continue
 			}
-			if children != 0 || !hasType {
-				return errors.New("nested Parquet schema is unsupported")
+			if len(remaining) == 0 {
+				return errors.New("invalid Parquet root child count")
+			}
+			depth := len(remaining)
+			remaining[depth-1]--
+			if hasChildren || !hasType {
+				if hasType || children == 0 {
+					return errors.New("invalid Parquet group schema element")
+				}
+				if depth >= maxSchemaDepth {
+					return errors.New("Parquet schema nesting is too deep")
+				}
+				if repetition < repetitionRequired || repetition > repetitionRepeated || (depth == 1 && repetition == repetitionRepeated) {
+					return errors.New("repeated or invalid Parquet group is unsupported")
+				}
+				remaining = append(remaining, children)
+				continue
+			}
+			if groupAnnotation {
+				return errors.New("Parquet LIST or MAP annotation on a leaf")
 			}
 			if physical < int64(parquet.Types.Boolean) || physical > int64(parquet.Types.FixedLenByteArray) {
 				return errors.New("invalid Parquet physical type")
 			}
-			if repetition != repetitionRequired && repetition != repetitionOptional {
+			if repetition < repetitionRequired || repetition > repetitionRepeated || (depth == 1 && repetition == repetitionRepeated) {
 				return errors.New("repeated or invalid Parquet leaf is unsupported")
 			}
 			if physical == int64(parquet.Types.FixedLenByteArray) && (width <= 0 || width > math.MaxInt32) {
 				return errors.New("invalid Parquet fixed binary width")
 			}
+			for len(remaining) > 0 && remaining[len(remaining)-1] == 0 {
+				remaining = remaining[:len(remaining)-1]
+			}
+		}
+		if len(remaining) != 0 {
+			return errors.New("invalid Parquet root child count")
 		}
 		return c.ReadListEnd(c.ctx)
 	})
@@ -393,17 +433,22 @@ func (c *compactReader) ReadUUID(context.Context) (thrift.Tuuid, error) {
 	return thrift.Tuuid{}, errMetadataUUID
 }
 
-func (c *compactReader) logicalType(kind thrift.TType) error {
+// logicalType validates one annotation and reports whether it is a LIST or MAP
+// annotation, which is only legal on group elements.
+func (c *compactReader) logicalType(kind thrift.TType) (group bool, err error) {
 	if kind != thrift.STRUCT {
-		return errors.New("logicalType must be a struct")
+		return false, errors.New("logicalType must be a struct")
 	}
 	members := 0
-	err := c.fields(func(id int, k thrift.TType) error {
+	err = c.fields(func(id int, k thrift.TType) error {
 		members++
 		if members != 1 || k != thrift.STRUCT {
 			return errors.New("logicalType must contain exactly one annotation")
 		}
 		switch id {
+		case logicalMap, logicalList:
+			group = true
+			return c.fields(func(_ int, k thrift.TType) error { return c.skip(k, 3) })
 		case logicalString, logicalEnum, logicalDate, logicalUnknown, logicalJSON, logicalBSON, logicalUUID:
 			return c.fields(func(_ int, k thrift.TType) error { return c.skip(k, 3) })
 		case logicalDecimal:
@@ -517,10 +562,10 @@ func (c *compactReader) logicalType(kind thrift.TType) error {
 		}
 	})
 	if err != nil {
-		return err
+		return false, err
 	}
 	if members != 1 {
-		return errors.New("empty Parquet logicalType union")
+		return false, errors.New("empty Parquet logicalType union")
 	}
-	return nil
+	return group, nil
 }

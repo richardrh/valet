@@ -46,14 +46,23 @@ const (
 )
 
 type parquetPreparation struct {
-	metadata                   *metadata.FileMetaData
-	schema                     *arrow.Schema
-	header                     []string
+	metadata *metadata.FileMetaData
+	schema   *arrow.Schema
+	header   []string
+	// leaves maps each header position to its Parquet leaf column index;
+	// nested top-level fields are excluded from header and listed in unsupported.
+	leaves                     []int
+	unsupported                []unsupportedColumn
 	footerSHA256               string
 	footerOffset, footerLength int64
 	decisions                  []data.GroupEvidence
 	selective                  bool
 	baseline                   bool
+}
+
+// unsupportedColumn is a top-level Parquet field that is not decoded.
+type unsupportedColumn struct {
+	name, typ string
 }
 
 type parquetInput struct {
@@ -63,6 +72,8 @@ type parquetInput struct {
 	reader          *orderedParquetRecords
 	schema          *arrow.Schema
 	header          []string
+	leaves          []int
+	unsupported     []unsupportedColumn
 	values          []cell // reused row cells
 	record          arrow.RecordBatch
 	row             int
@@ -176,16 +187,33 @@ func openParquet(ctx context.Context, d *Dataset, obj storage.Object, rows bool)
 		if e != nil {
 			return nil, e
 		}
-		p.schema, err = ar.Schema()
-		if err != nil {
-			return nil, err
+		full, e := ar.Schema()
+		if e != nil {
+			return nil, e
 		}
-		for _, f := range p.schema.Fields() {
+		if len(ar.Manifest.Fields) != full.NumFields() {
+			return nil, errors.New("Parquet schema manifest differs from Arrow schema")
+		}
+		kept := make([]arrow.Field, 0, full.NumFields())
+		// Non-nil even when empty: a nil column selection decodes every leaf.
+		p.leaves = make([]int, 0, full.NumFields())
+		for i, f := range full.Fields() {
+			leaf := ar.Manifest.Fields[i].ColIndex
+			if leaf < 0 {
+				// Nested fields (lists, structs, maps) are never decoded; rules
+				// and declared schemas referencing them get a schema issue.
+				p.unsupported = append(p.unsupported, unsupportedColumn{name: f.Name, typ: f.Type.String()})
+				continue
+			}
 			if _, e := optionsForArrow(f.Type); e != nil {
 				return nil, e
 			}
+			kept = append(kept, f)
 			p.header = append(p.header, f.Name)
+			p.leaves = append(p.leaves, leaf)
 		}
+		md := full.Metadata()
+		p.schema = arrow.NewSchema(kept, &md)
 		if err = validateNames(p.header); err != nil {
 			return nil, err
 		}
@@ -199,14 +227,14 @@ func openParquet(ctx context.Context, d *Dataset, obj storage.Object, rows bool)
 				}
 			}
 		}
-		if err = p.reserve(512+int64(len(p.header))*64, "Parquet preparation cache"); err != nil {
+		if err = p.reserve(512+int64(len(p.header)+len(p.unsupported))*64, "Parquet preparation cache"); err != nil {
 			return nil, err
 		}
-		if err = validateParquetStructure(meta, p.schema, obj.Size-parquetFooterBytes-size); err != nil {
+		if err = validateParquetStructure(meta, p.leaves, obj.Size-parquetFooterBytes-size); err != nil {
 			return nil, err
 		}
 		digest := sha256.Sum256(metadataBytes)
-		prepared = &parquetPreparation{metadata: meta, schema: p.schema, header: p.header,
+		prepared = &parquetPreparation{metadata: meta, schema: p.schema, header: p.header, leaves: p.leaves, unsupported: p.unsupported,
 			footerSHA256: hex.EncodeToString(digest[:]), footerOffset: obj.Size - parquetFooterBytes - size,
 			footerLength: size, baseline: !d.plan && !d.statisticsPending}
 		if err = d.store.SetParquetMetadataRange(obj, prepared.footerOffset); err != nil {
@@ -221,7 +249,7 @@ func openParquet(ctx context.Context, d *Dataset, obj storage.Object, rows bool)
 		d.retained += p.charge
 		p.charge = 0
 	} else {
-		p.schema, p.header = prepared.schema, prepared.header
+		p.schema, p.header, p.leaves, p.unsupported = prepared.schema, prepared.header, prepared.leaves, prepared.unsupported
 		p.file, err = newParquetFile(p, io.NewSectionReader(p.handle, 0, obj.Size), prepared.metadata)
 		if err != nil {
 			return nil, err

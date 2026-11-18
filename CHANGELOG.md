@@ -28,6 +28,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Error messages that mention a URI scheme without credentials, such as
   `s3:// objects`, are no longer rewritten to `s3: objects`.
+- Parquet files with list, struct or map columns no longer fail with
+  `operation failed`. Those columns are skipped and rules on the other columns
+  run normally. A rule or declared schema column that names a skipped column
+  rejects the schema with `unsupported Parquet column type list<...>` (exit 1).
+  Skipped columns are not written to row output.
 
 ## [0.1.0-rc.2] - 2026-10-26
 

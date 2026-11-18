@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/parquet/compress"
 	"github.com/apache/arrow-go/v18/parquet/metadata"
 	"github.com/richardrh/valet/internal/data"
@@ -18,9 +17,18 @@ import (
 
 // validateParquetStructure runs before a trusted decision can suppress payload
 // guards. Optional statistics are deliberately not structural requirements.
-func validateParquetStructure(meta *metadata.FileMetaData, schema *arrow.Schema, payloadEnd int64) error {
+// leaves lists the decoded leaf columns; skipped nested leaves still get the
+// chunk location checks but not the flat level and value-count checks.
+func validateParquetStructure(meta *metadata.FileMetaData, leaves []int, payloadEnd int64) error {
 	if meta.NumRows < 0 || payloadEnd < 4 {
 		return errors.New("invalid Parquet structural dimensions")
+	}
+	decoded := make([]bool, meta.Schema.NumColumns())
+	for _, leaf := range leaves {
+		if leaf < 0 || leaf >= len(decoded) {
+			return errors.New("Parquet leaf index outside schema")
+		}
+		decoded[leaf] = true
 	}
 	var rows int64
 	for group, raw := range meta.RowGroups {
@@ -28,7 +36,7 @@ func validateParquetStructure(meta *metadata.FileMetaData, schema *arrow.Schema,
 			return errors.New("invalid or overflowing Parquet row-group row count")
 		}
 		rows += raw.NumRows
-		if len(raw.Columns) != schema.NumFields() || len(raw.Columns) != meta.Schema.NumColumns() {
+		if len(raw.Columns) != meta.Schema.NumColumns() {
 			return errors.New("row-group column count differs from schema")
 		}
 		if raw.TotalByteSize < 0 || (raw.TotalCompressedSize != nil && *raw.TotalCompressedSize < 0) {
@@ -47,13 +55,13 @@ func validateParquetStructure(meta *metadata.FileMetaData, schema *arrow.Schema,
 			if chunk.Type() != descriptor.PhysicalType() {
 				return errors.New("Parquet chunk physical type differs from schema")
 			}
-			if descriptor.MaxRepetitionLevel() != 0 || descriptor.MaxDefinitionLevel() > 1 {
+			if decoded[col] && (descriptor.MaxRepetitionLevel() != 0 || descriptor.MaxDefinitionLevel() > 1) {
 				return errors.New("nested Parquet levels are unsupported")
 			}
 			if chunk.FilePath() != "" || chunk.CryptoMetadata() != nil {
 				return errors.New("external or encrypted Parquet column chunks are unsupported")
 			}
-			if chunk.NumValues() != raw.NumRows {
+			if decoded[col] && chunk.NumValues() != raw.NumRows {
 				return errors.New("flat Parquet chunk count differs from row-group count")
 			}
 			if chunk.TotalUncompressedSize() < 0 {
@@ -146,9 +154,10 @@ func (d *Dataset) ParquetGroups() ([]data.ParquetGroup, error) {
 			if err != nil {
 				return nil, err
 			}
-			facts := data.ParquetGroup{SourceOrdinal: uint64(ordinal + 1), RowGroup: uint64(group), DeclaredRows: rows, Source: obj.URI, FooterSHA256: prep.footerSHA256, FooterOffset: prep.footerOffset, FooterLength: prep.footerLength, IdentityMethod: obj.IdentityMethod, Identity: identity, Columns: make([]data.ColumnStatistics, len(raw.Columns))}
-			for col, chunk := range raw.Columns {
-				f := prep.schema.Field(col)
+			facts := data.ParquetGroup{SourceOrdinal: uint64(ordinal + 1), RowGroup: uint64(group), DeclaredRows: rows, Source: obj.URI, FooterSHA256: prep.footerSHA256, FooterOffset: prep.footerOffset, FooterLength: prep.footerLength, IdentityMethod: obj.IdentityMethod, Identity: identity, Columns: make([]data.ColumnStatistics, len(prep.leaves))}
+			for i, col := range prep.leaves {
+				chunk := raw.Columns[col]
+				f := prep.schema.Field(i)
 				stats := data.ColumnStatistics{Name: d.rename(f.Name), Type: f.Type, PhysicalType: chunk.MetaData.Type.String()}
 				stats.PhysicalLength = prep.metadata.Schema.Column(col).TypeLength()
 				if len(prep.metadata.ColumnOrders) > col && prep.metadata.ColumnOrders[col] != nil {
@@ -160,7 +169,7 @@ func (d *Dataset) ParquetGroups() ([]data.ParquetGroup, error) {
 					stats.MinExact, stats.MaxExact = rawStats.IsMinValueExact, rawStats.IsMaxValueExact
 					stats.LegacyOnly = (rawStats.MinValue == nil || rawStats.MaxValue == nil) && (rawStats.Min != nil || rawStats.Max != nil)
 				}
-				facts.Columns[col] = stats
+				facts.Columns[i] = stats
 			}
 			d.groups = append(d.groups, facts)
 		}

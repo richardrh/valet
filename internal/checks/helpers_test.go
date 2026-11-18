@@ -100,7 +100,7 @@ func bindProgram(t *testing.T, cfg *config.Config, schema *arrow.Schema, budget 
 }
 
 func bindProgramErr(cfg *config.Config, schema *arrow.Schema, budget *resource.Budget) (*Program, error) {
-	p, _, err := newProgram(context.Background(), cfg, schema, budget, true, nil, nil)
+	p, _, err := newProgram(context.Background(), cfg, schema, nil, budget, true, nil, nil)
 	return p, err
 }
 
