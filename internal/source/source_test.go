@@ -759,3 +759,28 @@ func TestTextDiscoveryPinsCompleteLocalIdentity(t *testing.T) {
 		})
 	}
 }
+
+func TestInferredFloatNonFiniteIsRowIssue(t *testing.T) {
+	body := "x\n1.5\nNaN\n-Infinity\n"
+	for _, mode := range []string{"row_error", "abort"} {
+		t.Run(mode, func(t *testing.T) {
+			input := config.Input{Type: "csv", Mode: "infer_types", InferSchemaLength: 1, OnTypeError: mode}
+			ds := fixture{name: "rows.csv", body: body, input: input}.dataset(t)
+			if mode == "abort" {
+				if err := readErr(t, ds); err == nil {
+					t.Error("read error = nil, want abort on non-finite float")
+				}
+				return
+			}
+			batch := readOne(t, ds)
+			for row, want := range []data.State{data.Valid, data.Invalid, data.Invalid} {
+				if got := batch.State("x", row); got != want {
+					t.Errorf("row %d state = %v, want %v", row, got, want)
+				}
+			}
+			if got, want := ingestCodes(batch), []string{"INGEST_TYPE", "INGEST_TYPE"}; !slices.Equal(got, want) {
+				t.Errorf("ingest codes = %v, want %v", got, want)
+			}
+		})
+	}
+}
