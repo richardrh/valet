@@ -427,7 +427,9 @@ func (r *datasetReader) appendRecord(b *lexicalBatch, rec *lexicalRecord) error 
 		default:
 			if e := appendCell(b.builder.Field(i), f.options, v); e != nil {
 				if d.cfg.Input.Schema == nil || (d.cfg.Input.OnTypeError == "abort" && !r.preflight) {
-					return fmt.Errorf("source %d row %d column %s: %w", r.object+1, r.row, f.name, e)
+					// Converter errors are static, value-free reasons (already
+					// published as INGEST_TYPE issue reasons), so the position is safe to show.
+					return diagnostics.PublicError(fmt.Errorf("source %d row %d column %s: %w", r.object+1, r.row, f.name, e))
 				}
 				state = data.Invalid
 				code, reason = "INGEST_TYPE", e.Error()

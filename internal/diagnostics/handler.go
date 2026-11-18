@@ -28,8 +28,9 @@ type publicError struct {
 func (e *publicError) Error() string { return e.message }
 func (e *publicError) Unwrap() error { return e.cause }
 
-// PublicError marks an error from CLI parsing or configuration validation as
-// safe to present. Callers MUST NOT use this for data/conversion errors, rule
+// PublicError marks an error from CLI parsing, configuration validation or an
+// audited, value-free input-format diagnostic (type, schema, metadata,
+// position) as safe to present. Callers MUST NOT use this for cell values, rule
 // messages, SDK responses, credentials or arbitrary backend errors. Embedded URI
 // userinfo, queries and fragments are still removed, the message is capped, and
 // the handler escapes terminal controls. A nil error remains nil.

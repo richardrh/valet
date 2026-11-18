@@ -149,7 +149,7 @@ func openParquet(ctx context.Context, d *Dataset, obj storage.Object, rows bool)
 			return nil, err
 		}
 		if err = validateCompact(metadataBytes); err != nil {
-			return nil, fmt.Errorf("invalid Parquet metadata: %w", err)
+			return nil, diagnostics.PublicError(fmt.Errorf("invalid Parquet metadata: %w", err))
 		}
 		var header [4]byte
 		if _, err = p.handle.ReadAt(header[:], 0); err != nil {
@@ -182,7 +182,7 @@ func openParquet(ctx context.Context, d *Dataset, obj storage.Object, rows bool)
 		}
 		for _, f := range p.schema.Fields() {
 			if _, e := optionsForArrow(f.Type); e != nil {
-				return nil, e
+				return nil, unsupportedParquetColumn(f.Name, f.Type)
 			}
 			p.header = append(p.header, f.Name)
 		}
@@ -411,4 +411,11 @@ func optionsForArrow(t arrow.DataType) (config.Column, error) {
 		return c, fmt.Errorf("unsupported or nested Parquet type %s", t)
 	}
 	return c, nil
+}
+
+// unsupportedParquetColumn reports a column type refused by optionsForArrow.
+// The message carries only file metadata (column name and type), never cell
+// values, so it is safe to present.
+func unsupportedParquetColumn(name string, t arrow.DataType) error {
+	return diagnostics.PublicError(fmt.Errorf("unsupported Parquet column %s type %s", name, t))
 }

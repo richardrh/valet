@@ -14,6 +14,7 @@ import (
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/richardrh/valet/internal/data"
+	"github.com/richardrh/valet/internal/diagnostics"
 )
 
 // nextNativeParquet keeps already compatible column buffers in Arrow. Genuine
@@ -177,7 +178,7 @@ func (r *datasetReader) nextNativeParquet(ctx context.Context) (batch *data.Batc
 					}
 					if invalid {
 						if d.cfg.Input.Schema == nil || (d.cfg.Input.OnTypeError == "abort" && !r.preflight) {
-							return nil, true, fmt.Errorf("source %d row %d column %s: %s", r.object+1, loc.Row, f.name, why)
+							return nil, true, diagnostics.PublicError(fmt.Errorf("source %d row %d column %s: %s", r.object+1, loc.Row, f.name, why))
 						}
 						code = "INGEST_TYPE"
 						reason = why
