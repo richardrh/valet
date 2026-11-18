@@ -28,6 +28,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Error messages that mention a URI scheme without credentials, such as
   `s3:// objects`, are no longer rewritten to `s3: objects`.
+- Rejected Parquet input now says why instead of `operation failed`, for
+  example `unsupported Parquet column x type large_utf8`,
+  `invalid Parquet metadata: ...` or
+  `source 1 row 2 column x: non-finite number`. Cell values, credentials and
+  URL secrets stay hidden.
 
 ## [0.1.0-rc.2] - 2026-10-26
 

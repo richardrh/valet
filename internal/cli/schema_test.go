@@ -123,3 +123,40 @@ func TestSchemaCommandOperationalFailures(t *testing.T) {
 	assertDiagnosticOnly(t, invoke(t, "schema", "-p", pipeline, "-i", bad, "--output", filepath.Join(root, "out")), ExitOperational)
 	assertExit(t, invoke(t, "help", "schema"), ExitOK)
 }
+
+// An unsupported Parquet column type is named on stderr instead of the
+// generic redacted "operation failed".
+func TestUnsupportedParquetTypeIsShown(t *testing.T) {
+	root := t.TempDir()
+	const secret = "SECRET-CELL"
+	schema := arrow.NewSchema([]arrow.Field{{Name: "x", Type: arrow.BinaryTypes.LargeString, Nullable: true}}, nil)
+	builder := array.NewRecordBuilder(memory.NewGoAllocator(), schema)
+	builder.Field(0).(*array.LargeStringBuilder).Append(secret)
+	record := builder.NewRecordBatch()
+	builder.Release()
+	defer record.Release()
+	var encoded bytes.Buffer
+	writer, err := pqarrow.NewFileWriter(schema, &encoded, parquet.NewWriterProperties(), pqarrow.NewArrowWriterProperties(pqarrow.WithStoreSchema()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = writer.Write(record); err != nil {
+		t.Fatal(err)
+	}
+	if err = writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	input := filepath.Join(root, "large.parquet")
+	if err = os.WriteFile(input, encoded.Bytes(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	pipeline := putFixture(t, root, "pipeline.yml", "input: {type: parquet}\nrules: [{code: R, level: error, column: x, checks: [{type: not_null}]}]\n")
+	r := invoke(t, "validate", "-p", pipeline, "-i", input)
+	assertDiagnosticOnly(t, r, ExitOperational)
+	if want := "unsupported Parquet column x type large_utf8"; !strings.Contains(r.stderr, want) {
+		t.Errorf("stderr = %q, want it to contain %q", r.stderr, want)
+	}
+	if strings.Contains(r.stderr, "operation failed") || strings.Contains(r.stderr, secret) {
+		t.Errorf("stderr = %q, want the cause without cell values", r.stderr)
+	}
+}

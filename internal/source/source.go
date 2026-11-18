@@ -380,7 +380,7 @@ func (d *Dataset) inspectParquet(ctx context.Context, obj storage.Object) (err e
 			af := p.schema.Field(i)
 			c, err := optionsForArrow(af.Type)
 			if err != nil {
-				return err
+				return unsupportedParquetColumn(name, af.Type)
 			}
 			if err = d.addColumn(d.rename(name), c, af.Type); err != nil {
 				return err
