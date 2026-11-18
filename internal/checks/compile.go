@@ -3,6 +3,7 @@ package checks
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -114,9 +115,11 @@ func (p *Program) rejected() bool { return p.summary.Status == data.StatusSchema
 // compiler holds compile-only state. It lives for one Compile or Describe
 // call and is dropped afterwards; nothing in Program refers to it.
 type compiler struct {
-	p           *Program
-	cfg         *config.Config
-	schema      *arrow.Schema
+	p      *Program
+	cfg    *config.Config
+	schema *arrow.Schema
+	// unsupported maps skipped nested input columns to their type.
+	unsupported map[string]string
 	exact       bool
 	types       map[string]columnContext
 	dateFormats map[string][]string
@@ -127,7 +130,7 @@ type compiler struct {
 
 // newProgram reserves the compiled-state estimate and, with bind, compiles
 // rules, conditions and dataset metrics against schema. A nil logger discards.
-func newProgram(ctx context.Context, cfg *config.Config, schema *arrow.Schema, budget *resource.Budget, bind bool, logger *slog.Logger, schemaIssueSink func(data.Issue) error) (*Program, *compiler, error) {
+func newProgram(ctx context.Context, cfg *config.Config, schema *arrow.Schema, unsupported map[string]string, budget *resource.Budget, bind bool, logger *slog.Logger, schemaIssueSink func(data.Issue) error) (*Program, *compiler, error) {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
@@ -203,7 +206,7 @@ func newProgram(ctx context.Context, cfg *config.Config, schema *arrow.Schema, b
 	for i, field := range schema.Fields() {
 		p.columnNames[i] = field.Name
 	}
-	c := &compiler{p: p, cfg: cfg, schema: schema, exact: cfg.Input.Schema != nil, gates: make(map[[2]int][]*compiledCheck)}
+	c := &compiler{p: p, cfg: cfg, schema: schema, unsupported: unsupported, exact: cfg.Input.Schema != nil, gates: make(map[[2]int][]*compiledCheck)}
 	if !bind {
 		return p, c, nil
 	}
@@ -218,6 +221,28 @@ func newProgram(ctx context.Context, cfg *config.Config, schema *arrow.Schema, b
 	return p, c, nil
 }
 
+// unsupportedColumnError reports a rule operand naming a nested input column
+// that the source skips instead of decoding.
+type unsupportedColumnError struct{ name, typ string }
+
+func (e *unsupportedColumnError) Error() string {
+	return fmt.Sprintf("operand column %q has %s", e.name, source.UnsupportedColumnReason(e.typ))
+}
+
+// compileProgram compiles cfg against ds. A rule operand naming an unsupported
+// column rejects the schema with an ingest issue rather than failing the run.
+func compileProgram(ctx context.Context, cfg *config.Config, ds *source.Dataset, budget *resource.Budget, logger *slog.Logger, schemaIssueSink func(data.Issue) error) (*Program, *compiler, []data.Issue, error) {
+	ingestIssues := ds.SchemaIssues()
+	p, c, err := newProgram(ctx, cfg, ds.Schema(), ds.UnsupportedColumns(), budget, len(ingestIssues) == 0, logger, schemaIssueSink)
+	var unsupported *unsupportedColumnError
+	if errors.As(err, &unsupported) {
+		reason := source.UnsupportedColumnReason(unsupported.typ)
+		ingestIssues = []data.Issue{{Code: "INGEST_SCHEMA", Severity: levelError, Origin: data.OriginIngest, Scope: data.ScopeSchema, Column: unsupported.name, Reason: reason, Message: reason}}
+		p, c, err = newProgram(ctx, cfg, ds.Schema(), ds.UnsupportedColumns(), budget, false, logger, schemaIssueSink)
+	}
+	return p, c, ingestIssues, err
+}
+
 // Compile binds cfg to the dataset schema, rejects the schema through error
 // level gates, loads reference indexes and runs the uniqueness/castability
 // prepass when needed. A nil logger discards compile, prepass and
@@ -226,8 +251,7 @@ func newProgram(ctx context.Context, cfg *config.Config, schema *arrow.Schema, b
 // row diagnostics.
 func Compile(ctx context.Context, cfg *config.Config, ds *source.Dataset, store *storage.Store, budget *resource.Budget, logger *slog.Logger, schemaIssueSink func(data.Issue) error) (*Program, error) {
 	start := time.Now()
-	ingestIssues := ds.SchemaIssues()
-	p, c, err := newProgram(ctx, cfg, ds.Schema(), budget, len(ingestIssues) == 0, logger, schemaIssueSink)
+	p, c, ingestIssues, err := compileProgram(ctx, cfg, ds, budget, logger, schemaIssueSink)
 	if err != nil {
 		return nil, err
 	}
@@ -262,8 +286,7 @@ func since(t time.Time) int64 { return time.Since(t).Milliseconds() }
 // Describe reports the passes and global state a run would need, without
 // reading rows or reference inputs.
 func Describe(ctx context.Context, cfg *config.Config, ds *source.Dataset, store *storage.Store, budget *resource.Budget) (*Description, error) {
-	ingestIssues := ds.SchemaIssues()
-	p, _, err := newProgram(ctx, cfg, ds.Schema(), budget, len(ingestIssues) == 0, nil, nil)
+	p, _, ingestIssues, err := compileProgram(ctx, cfg, ds, budget, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -329,6 +352,9 @@ func (p *Program) Close() error {
 func (c *compiler) bindOperand(name string) (operand, error) {
 	idx := c.schema.FieldIndices(name)
 	if len(idx) != 1 {
+		if typ, ok := c.unsupported[name]; ok && len(idx) == 0 {
+			return operand{}, &unsupportedColumnError{name: name, typ: typ}
+		}
 		return operand{}, fmt.Errorf("operand column %q is absent or ambiguous", name)
 	}
 	return operand{name: name, index: idx[0], typ: physicalType(c.schema.Field(idx[0]).Type), bound: &c.p.columns[idx[0]]}, nil

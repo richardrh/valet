@@ -283,7 +283,7 @@ func inspectSchemaObject(ctx context.Context, d *Dataset, report *SchemaReport, 
 		if err = report.reserve(int64(len(name) + len(f.Name) + len(f.Type.String()))); err != nil {
 			return err
 		}
-		column := p.file.MetaData().Schema.Column(i)
+		column := p.file.MetaData().Schema.Column(p.leaves[i])
 		nullable := column.MaxDefinitionLevel() > 0
 		attributes := schemaAttributes(f.Type)
 		attributes.PhysicalType, attributes.Nullable = column.PhysicalType().String(), &nullable

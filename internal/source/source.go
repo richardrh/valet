@@ -76,18 +76,21 @@ type field struct {
 	typ     arrow.DataType
 }
 type Dataset struct {
-	cfg                    *config.Config
-	kind                   inputKind
-	log                    *slog.Logger
-	plan                   bool
-	store                  *storage.Store
-	budget                 *resource.Budget
-	objects                []storage.Object
-	schema                 *arrow.Schema
-	columns                []field
-	byName                 map[string]int
-	transforms             []map[string]string
-	issues                 []data.Issue
+	cfg        *config.Config
+	kind       inputKind
+	log        *slog.Logger
+	plan       bool
+	store      *storage.Store
+	budget     *resource.Budget
+	objects    []storage.Object
+	schema     *arrow.Schema
+	columns    []field
+	byName     map[string]int
+	transforms []map[string]string
+	issues     []data.Issue
+	// unsupported maps renamed nested Parquet columns, which are never
+	// decoded, to their Arrow type.
+	unsupported            map[string]string
 	retained               int64
 	parquet                map[string]*parquetPreparation
 	groups                 []data.ParquetGroup
@@ -111,6 +114,15 @@ func NewGenerated(schema *arrow.Schema, open func(context.Context) (Reader, erro
 func (d *Dataset) Schema() *arrow.Schema      { return d.schema }
 func (d *Dataset) Objects() []storage.Object  { return d.objects }
 func (d *Dataset) SchemaIssues() []data.Issue { return d.issues }
+
+// UnsupportedColumns maps each skipped nested Parquet column to its Arrow type.
+func (d *Dataset) UnsupportedColumns() map[string]string { return d.unsupported }
+
+// UnsupportedColumnReason is the schema issue reason for a reference to a
+// nested Parquet column, which is skipped rather than decoded.
+func UnsupportedColumnReason(typ string) string {
+	return "unsupported Parquet column type " + typ
+}
 
 // Passes reports source passes spent before the main read (schema inference).
 func (d *Dataset) Passes() int { return d.passes }
@@ -387,6 +399,19 @@ func (d *Dataset) inspectParquet(ctx context.Context, obj storage.Object) (err e
 			}
 		}
 	}
+	for _, u := range p.unsupported {
+		name := d.rename(u.name)
+		if _, ok := d.unsupported[name]; ok {
+			continue
+		}
+		if err = d.reserve(int64(len(name)+len(u.typ))+renameEntryBytes, "unsupported Parquet columns"); err != nil {
+			return err
+		}
+		if d.unsupported == nil {
+			d.unsupported = make(map[string]string)
+		}
+		d.unsupported[name] = u.typ
+	}
 	return d.checkHeader(p.header)
 }
 
@@ -649,6 +674,12 @@ func (d *Dataset) checkHeader(names []string) error {
 		}
 	}
 	for _, c := range d.columns {
+		if typ, ok := d.unsupported[c.name]; ok {
+			if err := d.addIssue(c.name, UnsupportedColumnReason(typ)); err != nil {
+				return err
+			}
+			continue
+		}
 		required := d.cfg.Input.Schema == nil || c.options.Required
 		if required && !seen[c.name] {
 			if err := d.addIssue(c.name, "required input column is absent"); err != nil {
