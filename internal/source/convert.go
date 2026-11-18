@@ -385,10 +385,19 @@ func parseUnsigned(s string, bits int) (uint64, error) {
 	}
 	return v, nil
 }
+
+// errNonFiniteFloat marks a well-formed NaN/Inf lexeme. Unlike other
+// conversion failures it is not a type incompatibility, so schema-less
+// readers report it as a row issue instead of an input error.
+var errNonFiniteFloat = errors.New("invalid or non-finite float")
+
 func parseFloat(s string, bits int) (float64, error) {
 	v, e := strconv.ParseFloat(s, bits)
-	if e != nil || math.IsNaN(v) || math.IsInf(v, 0) {
+	if e != nil {
 		return 0, errors.New("invalid or non-finite float")
+	}
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0, errNonFiniteFloat
 	}
 	return v, nil
 }

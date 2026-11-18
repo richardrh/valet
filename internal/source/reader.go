@@ -426,7 +426,10 @@ func (r *datasetReader) appendRecord(b *lexicalBatch, rec *lexicalRecord) error 
 			}
 		default:
 			if e := appendCell(b.builder.Field(i), f.options, v); e != nil {
-				if d.cfg.Input.Schema == nil || (d.cfg.Input.OnTypeError == "abort" && !r.preflight) {
+				// Schema-less inference froze the column type, so a later
+				// incompatible value is an input error; a NaN/Inf float is
+				// type-compatible and stays a row issue.
+				if (d.cfg.Input.Schema == nil && !errors.Is(e, errNonFiniteFloat)) || (d.cfg.Input.OnTypeError == "abort" && !r.preflight) {
 					return fmt.Errorf("source %d row %d column %s: %w", r.object+1, r.row, f.name, e)
 				}
 				state = data.Invalid

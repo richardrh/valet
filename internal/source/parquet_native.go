@@ -176,7 +176,7 @@ func (r *datasetReader) nextNativeParquet(ctx context.Context) (batch *data.Batc
 						invalid, why = !a.Value(row).FitsInPrecision(a.DataType().(*arrow.Decimal128Type).Precision), "decimal exceeds declared precision"
 					}
 					if invalid {
-						if d.cfg.Input.Schema == nil || (d.cfg.Input.OnTypeError == "abort" && !r.preflight) {
+						if d.cfg.Input.OnTypeError == "abort" && !r.preflight {
 							return nil, true, fmt.Errorf("source %d row %d column %s: %s", r.object+1, loc.Row, f.name, why)
 						}
 						code = "INGEST_TYPE"

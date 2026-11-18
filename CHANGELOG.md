@@ -28,6 +28,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Error messages that mention a URI scheme without credentials, such as
   `s3:// objects`, are no longer rewritten to `s3: objects`.
+- A NaN or infinite float without a declared `input.schema` no longer stops
+  the run with `operation failed` (exit 2). In Parquet, and in an inferred
+  CSV/JSON float column after the inference sample, it is now an
+  `INGEST_TYPE` row issue (exit 1), as with a declared schema.
+  `input.on_type_error: abort` still stops the run.
 
 ## [0.1.0-rc.2] - 2026-10-26
 

@@ -289,3 +289,36 @@ func TestParquetFixedWidthUsesPhysicalBytes(t *testing.T) {
 		t.Error("row width check one byte below physical width = nil, want error")
 	}
 }
+
+func TestSchemalessNativeNonFiniteIsRowIssue(t *testing.T) {
+	resource.ConfigureParquetCodecs()
+	for _, mode := range []string{"row_error", "abort"} {
+		t.Run(mode, func(t *testing.T) {
+			b := array.NewFloat64Builder(memory.NewGoAllocator())
+			b.AppendValues([]float64{1.5, math.NaN(), math.Inf(1), math.Inf(-1)}, nil)
+			values := b.NewArray()
+			b.Release()
+			schema := arrow.NewSchema([]arrow.Field{{Name: "x", Type: arrow.PrimitiveTypes.Float64, Nullable: true}}, nil)
+			record := array.NewRecordBatch(schema, []arrow.Array{values}, 4)
+			values.Release()
+			path := nativeFixture(t, record)
+			record.Release()
+			ds := openParquetDataset(t, path, config.Input{OnTypeError: mode})
+			if mode == "abort" {
+				if err := readErr(t, ds); err == nil {
+					t.Error("read error = nil, want abort on non-finite float")
+				}
+				return
+			}
+			batch := readOne(t, ds)
+			for row, want := range []data.State{data.Valid, data.Invalid, data.Invalid, data.Invalid} {
+				if got := batch.State("x", row); got != want {
+					t.Errorf("row %d state = %v, want %v", row, got, want)
+				}
+			}
+			if got, want := ingestCodes(batch), []string{"INGEST_TYPE", "INGEST_TYPE", "INGEST_TYPE"}; !slices.Equal(got, want) {
+				t.Errorf("ingest codes = %v, want %v", got, want)
+			}
+		})
+	}
+}
