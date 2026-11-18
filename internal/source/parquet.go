@@ -192,7 +192,7 @@ func openParquet(ctx context.Context, d *Dataset, obj storage.Object, rows bool)
 		if d.cfg.Input.Schema == nil && len(d.columns) > 0 {
 			for _, f := range p.schema.Fields() {
 				index := d.index(d.rename(f.Name))
-				if index >= 0 && !arrow.TypeEqual(d.columns[index].typ, f.Type) {
+				if index >= 0 && !arrow.TypeEqual(d.columns[index].typ, parquetLogicalType(f.Type)) {
 					if err = d.addIssue(d.rename(f.Name), "incompatible Parquet physical schema"); err != nil {
 						return nil, err
 					}
@@ -353,8 +353,12 @@ func parquetCell(a arrow.Array, row int) cell {
 	switch x := a.(type) {
 	case *array.Binary:
 		v.kind, v.text = kindBytes, string(x.Value(row))
+	case *array.LargeBinary:
+		v.kind, v.text = kindBytes, string(x.Value(row))
 	case *array.FixedSizeBinary:
 		v.kind, v.text = kindBytes, string(x.Value(row))
+	case *array.Dictionary:
+		return parquetCell(x.Dictionary(), x.GetValueIndex(row))
 	case *array.Boolean:
 		v.kind, v.text = kindBool, x.ValueStr(row)
 	case *array.Timestamp:
@@ -385,7 +389,23 @@ func parquetCell(a arrow.Array, row int) cell {
 	return v
 }
 
+// parquetLogicalType maps physical Arrow encodings restored from ARROW:schema
+// onto the value type valet validates: dictionaries decode to their values and
+// 64-bit offset strings/binaries share the 32-bit logical domain.
+func parquetLogicalType(t arrow.DataType) arrow.DataType {
+	switch t.ID() {
+	case arrow.DICTIONARY:
+		return parquetLogicalType(t.(*arrow.DictionaryType).ValueType)
+	case arrow.LARGE_STRING:
+		return arrow.BinaryTypes.String
+	case arrow.LARGE_BINARY:
+		return arrow.BinaryTypes.Binary
+	}
+	return t
+}
+
 func optionsForArrow(t arrow.DataType) (config.Column, error) {
+	t = parquetLogicalType(t)
 	c := config.Column{Type: t.Name()}
 	switch t.ID() {
 	case arrow.NULL:
